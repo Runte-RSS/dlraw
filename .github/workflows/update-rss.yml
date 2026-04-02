@@ -54,15 +54,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Debug remote access to mangamirror
-        run: |
-          echo "Runner public IP (for debugging):"
-          curl -sS https://ifconfig.me || true
-          echo
-          echo "HEAD request to a failing page (with browser UA):"
-          curl -I -L -sS -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" \
-            -H "Accept: text/html" \
-            "https://mangamirror.com/manga/121372-transmigrating-into-the-cyber-game-after-being-on-top-for-killing-boss" || true
 
       - name: Validate rss.xml before cleanup
         run: |
@@ -81,14 +72,7 @@ jobs:
                   print('Restored seen.json from backup')
               sys.exit(1)
           PY
- 
 
-      - name: Remove empty RSS items (pre-clean, no push)
-        run: |
-          # dry-run first while you confirm behavior
-          python remove_empty_items.py --rss rss.xml --seen seen.json --dry-run
-          # then run for real
-          python remove_empty_items.py --rss rss.xml --seen seen.json
 
       # later: restore backups if generator fails
       - name: Restore backups on failure
