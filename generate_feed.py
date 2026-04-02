@@ -342,67 +342,70 @@ def write_rss(channel_title, channel_link, channel_desc, items, out_file):
     parts.append(f'    <lastBuildDate>{now_rfc2822()}</lastBuildDate>')
 
     # optional channel image from first item
+    channel_image_url = ""
     if items and items[0].get("image"):
+        channel_image_url = items[0]["image"]
         parts.append('    <image>')
-        parts.append(f'      <url>{escape(items[0]["image"])}</url>')
+        parts.append(f'      <url>{escape(channel_image_url)}</url>')
         parts.append(f'      <title>{escape(channel_title)}</title>')
         parts.append(f'      <link>{escape(channel_link)}</link>')
         parts.append('    </image>')
 
-   # assume channel_image_url is set earlier, e.g. channel_image_url = items[0].get("image") or ""
-for it in items:
-    title = escape(it.get("title", ""))
-    link = escape(it.get("link", ""))
-    guid = escape(it.get("guid", ""))
-    pubDate = it.get("pubDate", "")
-    # description may contain HTML; wrap in CDATA
-    desc = it.get("description", "")
-    if "]]>" in desc:
-        desc_block = escape(desc)
-    else:
-        desc_block = f"<![CDATA[{desc}]]>"
-
-    parts.append('    <item>')
-    parts.append(f'      <title>{title}</title>')
-    parts.append(f'      <link>{link}</link>')
-    parts.append(f'      <guid isPermaLink="false">{guid}</guid>')
-    parts.append(f'      <pubDate>{pubDate}</pubDate>')
-
-    # image selection: prefer per-item thumb, then item image, then channel image
-    image = it.get("thumb") or it.get("image") or channel_image_url or ""
-    if image:
-        # normalize to absolute https
-        if image.startswith("//"):
-            image = "https:" + image
-        if image.startswith("http://"):
-            image = image.replace("http://", "https://", 1)
-
-        # media tags
-        parts.append(f'      <media:thumbnail url="{escape(image)}" />')
-        parts.append(f'      <media:content url="{escape(image)}" medium="image" />')
-
-        # enclosure with MIME type and optional length
-        ctype, clen = _head_length_and_type(image)
-        if not ctype:
-            if image.lower().endswith(".png"):
-                ctype = "image/png"
-            elif image.lower().endswith((".jpg", ".jpeg")):
-                ctype = "image/jpeg"
-            elif image.lower().endswith(".webp"):
-                ctype = "image/webp"
-            else:
-                ctype = "image/*"
-
-        if clen:
-            parts.append(f'      <enclosure url="{escape(image)}" type="{escape(ctype)}" length="{clen}" />')
+    # ---------- per-item entries (must be indented inside the function) ----------
+    for it in items:
+        title = escape(it.get("title", ""))
+        link = escape(it.get("link", ""))
+        guid = escape(it.get("guid", ""))
+        pubDate = it.get("pubDate", "")
+        # description may contain HTML; wrap in CDATA
+        desc = it.get("description", "")
+        if "]]>" in desc:
+            desc_block = escape(desc)
         else:
+            desc_block = f"<![CDATA[{desc}]]>"
+
+        parts.append('    <item>')
+        parts.append(f'      <title>{title}</title>')
+        parts.append(f'      <link>{link}</link>')
+        parts.append(f'      <guid isPermaLink="false">{guid}</guid>')
+        parts.append(f'      <pubDate>{pubDate}</pubDate>')
+
+        # image selection: prefer per-item thumb, then item image, then channel image
+        image = it.get("thumb") or it.get("image") or channel_image_url or ""
+        if image:
+            # normalize to absolute https
+            if image.startswith("//"):
+                image = "https:" + image
+            if image.startswith("http://"):
+                image = image.replace("http://", "https://", 1)
+
+            # media tags
+            parts.append(f'      <media:thumbnail url="{escape(image)}" />')
+            parts.append(f'      <media:content url="{escape(image)}" medium="image" />')
+
+            # enclosure with MIME type (simple fallback)
+            ctype = it.get("_mime") or ""
+            if not ctype:
+                if image.lower().endswith(".png"):
+                    ctype = "image/png"
+                elif image.lower().endswith((".jpg", ".jpeg")):
+                    ctype = "image/jpeg"
+                elif image.lower().endswith(".webp"):
+                    ctype = "image/webp"
+                else:
+                    ctype = "image/*"
             parts.append(f'      <enclosure url="{escape(image)}" type="{escape(ctype)}" />')
 
-    parts.append(f'      <description>{desc_block}</description>')
-    parts.append('    </item>')
+        parts.append(f'      <description>{desc_block}</description>')
+        parts.append('    </item>')
 
+    parts.append('  </channel>')
+    parts.append('</rss>')
 
     raw = "\n".join(parts).encode("utf-8")
+    with open(out_file, "wb") as f:
+        f.write(raw)
+
 
     # pretty-print using minidom (works reliably across Python versions)
     try:
