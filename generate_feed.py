@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from email.utils import format_datetime
 from urllib.parse import urljoin
 import xml.etree.ElementTree as ET
-
+import hashlib   # add at top of file if not already present
 import requests
 from bs4 import BeautifulSoup
 
@@ -244,14 +244,21 @@ def parse_dlraw_index(html: str, base_url: str):
     return candidates
 
 
-# --- gather latest (single, robust implementation) ---
+import hashlib  # ensure this is at top of file (only once)
+
 def gather_latest_from_site(site: dict) -> dict | None:
     url = site["url"]
     html = fetch_page(url)
+
+    # canonical site URL and optional per-site thumbnail
+    site_url = site.get("url", "")
+    site_thumb = site.get("thumb", "")   # per-site default thumb (if any)
+
     if not html:
         logging.debug("Failed to fetch %s", url)
         return None
 
+    # parse candidates from the index page (your existing parser)
     candidates = parse_dlraw_index(html, url)
     if not candidates:
         logging.debug("No candidates found on %s", url)
@@ -279,24 +286,34 @@ def gather_latest_from_site(site: dict) -> dict | None:
     if best is None:
         return None
 
+    # build the item dict now that we have the chosen candidate
     title = best["title"]
-    guid = make_guid(url, title)
     pubDate = now_rfc2822()
+    # prefer item-specific thumb, then site default
     thumb = best.get("thumb") or site.get("thumb") or ""
     desc_html = (
         f'<a href="{url}">'
-        f'<img src="{thumb}" alt="{title}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
+        f'<img src="{thumb}" alt="{escape(title)}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
         f'</a>'
-        f'<div><a href="{url}">{site.get("title") or url}</a><br/>{title}</div>'
+        f'<div><a href="{url}">{escape(site.get("title") or url)}</a><br/>{escape(title)}</div>'
     )
-    return {
+
+    # compute GUID and include a short hash of the thumb so readers notice thumbnail changes
+    thumb_hash = hashlib.sha1((thumb or "").encode()).hexdigest()[:8]
+    guid = make_guid(site_url, title) + "|" + thumb_hash
+
+    latest = {
         "title": title,
         "link": url,
         "guid": guid,
         "pubDate": pubDate,
         "description": desc_html,
         "image": thumb,
+        # also expose thumb explicitly for write_rss to prefer
+        "thumb": thumb,
     }
+
+    return latest
 
 
 
@@ -463,7 +480,7 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
             seen.setdefault("items", []).append({"guid": latest["guid"], "seen_at": datetime.now(timezone.utc).isoformat()})
             newly_added_guids.append(latest["guid"])
 
-    # merged = newest-per-site only (no history)
+        # merged = newest-per-site only (no history)
     merged = []
     seen_merge = set()
     for it in new_items:
@@ -472,6 +489,61 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
             seen_merge.add(it["guid"])
     merged = merged[:max_items]
 
+    import pprint
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug("Merged items preview (title, link, image, thumb, guid):")
+        for m in merged[:8]:
+            logging.debug("  %r | %r | image=%r thumb=%r guid=%r",
+                          m.get("title"), m.get("link"),
+                          m.get("image"), m.get("thumb"), m.get("guid"))
+
+
+    # --- ensure merged items use per-site thumb and rebuild description ---
+    from datetime import datetime
+
+    for item in merged:
+        link = item.get("link", "")
+        # find matching site (match by URL prefix)
+        matched_site = None
+        for s in sites:
+            s_url = s.get("url", "")
+            if s_url and link.startswith(s_url):
+                matched_site = s
+                break
+        # Force the per-site thumb when available; otherwise keep existing item thumb/image
+        if matched_site and matched_site.get("thumb"):
+            item["thumb"] = matched_site.get("thumb")
+        else:
+            item["thumb"] = item.get("thumb") or item.get("image") or ""
+
+
+        if item.get("thumb"):
+            item["image"] = item["thumb"]
+
+        # rebuild description so the <img src="..."> uses the same thumb
+        title = item.get("title", "")
+        site_title = matched_site.get("title") if matched_site else (item.get("site_title") or "")
+        thumb = item.get("thumb") or item.get("image") or ""
+        item["description"] = (
+            f'<a href="{link}">'
+            f'<img src="{thumb}" alt="{escape(title)}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
+            f'</a>'
+            f'<div><a href="{link}">{escape(site_title or link)}</a><br/>{escape(title)}</div>'
+        )
+
+
+        # rebuild description HTML so the <img src="..."> uses the thumb
+        title = item.get("title", "")
+        site_title = matched_site.get("title") if matched_site else (item.get("site_title") or "")
+        thumb = item.get("thumb") or item.get("image") or ""
+        desc_html = (
+            f'<a href="{link}">'
+            f'<img src="{thumb}" alt="{escape(title)}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
+            f'</a>'
+            f'<div><a href="{link}">{escape(site_title or link)}</a><br/>{escape(title)}</div>'
+        )
+        item["description"] = desc_html
+
     # write rss and seen (preserve the seen structure we built)
     build_rss(merged, rss_file)
     save_seen(seen_file, seen)
@@ -479,8 +551,8 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
     return {"added": newly_added_guids, "total": len(merged)}
 
 
+
 # -----------------------
-# CLI
 # -----------------------
 def main():
     p = argparse.ArgumentParser()
