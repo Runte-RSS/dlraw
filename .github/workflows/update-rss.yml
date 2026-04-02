@@ -1,0 +1,183 @@
+name: Update RSS Feed
+
+on:
+  push:
+    paths:
+      - 'generate_feed.py'
+      - 'requirements.txt'
+      - 'SITES*'
+  schedule:
+    - cron: '0 * * * *' # hourly; adjust as needed
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+            python -m pip install --upgrade pip setuptools wheel
+            if [ -f requirements.txt ]; then
+              pip install -r requirements.txt
+            else
+              echo "No requirements.txt found; installing cloudscraper only"
+              pip install cloudscraper
+            fi
+
+      - name: Debug Python environment
+        run: |
+          python -V
+          python -c "import sys, pkgutil; print('dateutil present:', pkgutil.find_loader('dateutil') is not None)"
+          pip --version
+          pip freeze
+
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Debug remote access to mangamirror
+        run: |
+          echo "Runner public IP (for debugging):"
+          curl -sS https://ifconfig.me || true
+          echo
+          echo "HEAD request to a failing page (with browser UA):"
+          curl -I -L -sS -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" \
+            -H "Accept: text/html" \
+            "https://mangamirror.com/manga/121372-transmigrating-into-the-cyber-game-after-being-on-top-for-killing-boss" || true
+
+      - name: Validate rss.xml before cleanup
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET, sys, shutil, os
+          try:
+              ET.parse('rss.xml')
+              print('rss.xml parse OK')
+          except Exception as e:
+              print('rss.xml parse failed:', e)
+              if os.path.exists('rss.xml.bak'):
+                  shutil.copy2('rss.xml.bak', 'rss.xml')
+                  print('Restored rss.xml from backup')
+              if os.path.exists('seen.json.bak'):
+                  shutil.copy2('seen.json.bak', 'seen.json')
+                  print('Restored seen.json from backup')
+              sys.exit(1)
+          PY
+ 
+
+      - name: Remove empty RSS items (pre-clean, no push)
+        run: |
+          # dry-run first while you confirm behavior
+          python remove_empty_items.py --rss rss.xml --seen seen.json --dry-run
+          # then run for real
+          python remove_empty_items.py --rss rss.xml --seen seen.json
+
+      # later: restore backups if generator fails
+      - name: Restore backups on failure
+        if: ${{ failure() }}
+        run: |
+          if [ -f rss.xml.bak ]; then cp rss.xml.bak rss.xml; fi
+          if [ -f seen.json.bak ]; then cp seen.json.bak seen.json; fi
+          echo "Restored backups because job failed"
+
+
+      - name: Run feed generator
+        run: |
+          python generate_feed.py
+
+      - name: Backup feed files
+        run: |
+          cp rss.xml rss.xml.bak || true
+          cp seen.json seen.json.bak || true
+
+      - name: Install Python dependencies for filler
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Show changed files
+        run: |
+          git status --porcelain
+          git --no-pager diff --name-only
+
+      - name: Commit and push feed changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # show local changes for debugging
+          git status --porcelain
+          git --no-pager diff --name-only || true
+
+          # Fetch remote and rebase, auto-stashing any local changes
+          git fetch origin main
+          if ! git rebase --autostash origin/main; then
+            echo "Rebase failed; aborting to avoid conflicts"
+            git rebase --abort || true
+            # restore backups if you created them inside the repo
+            if [ -f rss.xml.bak ]; then cp rss.xml.bak rss.xml; fi
+            if [ -f seen.json.bak ]; then cp seen.json.bak seen.json; fi
+            exit 1
+          fi
+
+          git add rss.xml seen.json || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-update rss.xml and seen.json (GitHub Actions)"
+            git push --force-with-lease origin HEAD:main
+          fi
+
+
+
+      - name: Commit and push feed changes (verbose)
+        run: |
+          set -x
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # show what changed
+          git status --porcelain
+          git --no-pager diff --name-only
+          # stage files (no-op if missing)
+          git add rss.xml seen.json || true
+          # show staged
+          git diff --cached --name-only || true
+          # commit (fail if commit fails for reasons other than "no changes")
+          if git commit -m "Auto-update rss.xml and seen.json (GitHub Actions)"; then
+            echo "Committed changes, attempting push..."
+          else
+            echo "No commit created or commit failed; showing last commit"
+            git --no-pager log -n 1 --pretty=oneline
+          fi
+          # show remote HEAD before push
+          git fetch origin
+          git rev-parse origin/main || true
+          # push and capture output
+          if ! git push origin HEAD:main --verbose; then
+            echo "Push failed; show remote refs and permissions"
+            git remote -v
+            git ls-remote origin
+            exit 1
+          fi
+
+
+
+

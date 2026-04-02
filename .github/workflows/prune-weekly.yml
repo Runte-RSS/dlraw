@@ -1,0 +1,46 @@
+name: Prune old RSS items weekly
+
+on:
+  schedule:
+    - cron: '0 12 * * 6'   # Saturday 12:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Ensure script is present
+        run: |
+          ls -la
+          python --version
+
+      - name: Dry run (optional, logs what would be removed)
+        run: |
+          python prune_feed.py --rss rss.xml --seen seen.json --days 14 --dry-run --debug
+
+      - name: Run prune
+        run: |
+          python prune_feed.py --rss rss.xml --seen seen.json --days 14 --debug
+
+      - name: Commit changes if any
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add rss.xml seen.json || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Prune old RSS/seen entries (weekly)" || true
+            git push origin HEAD:main
+          fi
