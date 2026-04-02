@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+  
+  
+  <channel>
+    
+    
+    <title>DL-Raw Watchlist</title>
+    
+    
+    <link>https://example.com/</link>
+    
+    
+    <description>Auto-generated manga feed (dlraw watcher)</description>
+    
+    
+    <lastBuildDate>Thu, 02 Apr 2026 22:47:49 +0000</lastBuildDate>
+    
+    
+    <image>
+      
+      
+      <url>https://i.imgur.com/2U5KdE2.png</url>
+      
+      
+      <title>DL-Raw Watchlist</title>
+      
+      
+      <link>https://example.com/</link>
+      
+    
+    </image>
+    
+
+    
+  
+  </channel>
+  
+
+</rss>
