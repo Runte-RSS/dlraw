@@ -1,97 +1,89 @@
 #!/usr/bin/env python3
-# generate_feed.py
-# Simple RSS generator for Fluent Reader. Add sites to SITES list.
+"""
+generate_feed.py
 
-import re
-from dateutil import parser as dateparser
-import json
-import xml.etree.ElementTree as ET
+Auto-generate an RSS feed (rss.xml) from one or more dlraw-style index pages.
+- Writes rss.xml and seen.json in the current directory.
+- Runs a single iteration and exits (scheduling should be handled by your workflow/cron).
+- Easy to add more sites: edit the SITES list below.
+- Keeps only newest releases (per-site canonicalization).
+- Each item includes a link back to the dlraw index page (not to mirror hosts),
+  a description with an <img> thumbnail, and media/enclosure tags.
+
+Usage:
+    python generate_feed.py            # run once and exit
+    python generate_feed.py --debug    # verbose logging
+    python generate_feed.py --max 40   # keep up to 40 items in feed
+
+Dependencies:
+    pip install requests beautifulsoup4
+"""
+
+from __future__ import annotations
 import os
-import hashlib
+import re
+import json
+import argparse
+import logging
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from urllib.parse import urljoin
+import xml.etree.ElementTree as ET
+
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
+
 from xml.sax.saxutils import escape
-import cloudscraper
-import time
-import random
+from xml.dom import minidom
+import tempfile
 
-RSS_FILE = "rss.xml"
-SEEN_FILE = "seen.json"
-MAX_ITEMS = 50
-USER_AGENT = "Mozilla/5.0 (compatible; rss-bot/1.0; +https://example.com/)"
-
-# Add sites here. Each entry needs: title, url (manga page), image (thumbnail)
+# -----------------------
+# Configuration: add sites here
+# -----------------------
 SITES = [
     {
-        "title": "One Piece",
-        "url": "https://tcbonepiecechapters.com/mangas/5/one-piece",
-        "image": "https://cdn.onepiecechapters.com/file/CDN-M-A-N/Screen-Shot-2021-04-23-at-9.31.12-PM-1024x732v3.png",
+        "title": "Young King Ours",
+        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E3%83%A4%E3%83%B3%E3%82%B0%E3%82%AD%E3%83%B3%E3%82%B0%E3%82%A2%E3%83%AF%E3%83%BC%E3%82%BA/",
+        "thumb": "https://upload.wikimedia.org/wikipedia/commons/8/89/Portrait_Placeholder.png",
     },{
-        "title": "Shut Up, Evil Dragon! I don’t want to raise a child with you anymore",
-        "url": "https://mangamirror.com/manga/122851-shut-up-evil-dragon-i-dont-want-to-raise-a-child-with-you-anymore",
-        "image": "https://media.manhuabuddy.com/files/images/thumbs/shut-up-evil-dragon-i-dont-want-to-raise-a-child-with-you-anymore.webp",
+        "title": "Youjo Senki",
+        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/",
+        "thumb": "https://puu.sh/KKZc7.png",
     },{
-        "title": "Transmigrating Into The Cyber Game After Being On Top For Killing Boss",
-        "url": "https://mangamirror.com/manga/121372-transmigrating-into-the-cyber-game-after-being-on-top-for-killing-boss",
-        "image": "https://cdn.anime-planet.com/manga/primary/after-transmigrating-into-the-cyberpunk-game-i-defeated-the-boss-and-successfully-rose-to-the-top-1.webp?t=1759754015",
-    },{
-        "title": "I Played the Role of the Adopted Daughter Too Well",
-        "url": "https://mangamirror.com/manga/50583-i-played-the-role-of-the-adopted-daughter-too-well",
-        "image": "https://www.mangaread.org/wp-content/uploads/2023/09/28-1677642819-193x278.jpg",
-    },{
-        "title": "The Fox-Eyed Villain of the Demon Academy",
-        "url": "https://mangamirror.com/manga/127739-the-fox-eyed-villain-of-the-demon-academy",
-        "image": "https://static.asurascans.my/book/f47aadb5-8bff-4ba1-bece-66f0ec681c24/cover/b54fe4a9-a71f-400c-929a-2b1ef9b4c7dd.webp?width=400&type=webp",
-    },{
-        "title": "Revenge Of The Sword Clan's Hound",
-        "url": "https://mangamirror.com/manga/59511-revenge-of-the-sword-clans-hound",
-        "image": "https://bulbasaur.poke-black-and-white.net/covers/6851547b702284f834178357/cover_1752077533539.webp",
-    },{
-        "title": "The Billionaire’s Replacement Wife",
-        "url": "https://mangamirror.com/manga/95801-the-billionaires-replacement-wife",
-        "image": "https://us-a.tapas.io/sa/76/2546a686-8b25-4e18-bdb5-2306567d34da.jpg",
-    },{
-        "title": "Black Killer Whale Baby",
-        "url": "https://mangamirror.com/manga/119653-black-killer-whale-baby",
-        "image": "https://cdn.novelupdates.com/images/2023/06/Black-Killer-Whale-Baby.jpg",
-    },{
-        "title": "Nia Liston: The Merciless Maiden",
-        "url": "https://mangamirror.com/manga/107322-nia-liston-the-merciless-maiden",
-        "image": "https://cdn.anisearch.com/images/manga/cover/76/76700_600.webp",
-    }
-    # Example: add more sites below
-    # {
-    #   "title": "Another Manga",
-    #   "url": "https://example.com/manga/slug",
-    #   "image": "https://example.com/thumb.png",
-    # },
+        "title": "Isekai Meikyuu de Harem wo",
+        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/",
+        "thumb": "https://static.zerochan.net/Isekai.Meikyuu.de.Harem.wo.1024.3730804.webp",
+    },
+    # Add more sites here as needed:
+    # {"title": "Another Series", "url": "https://dlraw.cc/.../", "thumb": "https://..."},
 ]
-# --- headers and session (module-level, safe) ---
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://google.com/",
-}
 
-session = requests.Session()
-session.headers.update(HEADERS)
+# Feed metadata
+FEED_TITLE = "DL-Raw Watchlist"
+FEED_LINK = "https://example.com/"
+FEED_DESC = "Auto-generated manga feed (dlraw watcher)"
+RSS_FILE = "rss.xml"
+SEEN_FILE = "seen.json"
+MAX_ITEMS = 50  # keep this many items in the feed
 
-# configure retries (safe defaults)
-retries = Retry(
-    total=2,
-    backoff_factor=0.5,
-    status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["HEAD", "GET", "OPTIONS"]
-)
-session.mount("https://", HTTPAdapter(max_retries=retries))
-session.mount("http://", HTTPAdapter(max_retries=retries))
+# HTTP settings (place near top of file)
+REQUEST_TIMEOUT = 20.0
+USER_AGENT = "MangaFeedBot/1.0 (+https://example.com/)"
+HEADERS = {"User-Agent": USER_AGENT}
 
+# simple fetch helper used by gather_latest_from_site
+def fetch_page(url: str) -> str | None:
+    try:
+        import requests
+        r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        return r.text
+    except Exception as e:
+        logging.debug("fetch_page error for %s: %s", url, e)
+        return None
+
+
+# MIME helper
 MIME_BY_EXT = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -99,661 +91,375 @@ MIME_BY_EXT = {
     ".gif": "image/gif",
     ".webp": "image/webp",
     ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
 }
 
-def mime_for_url(url):
+def mime_for_url(url: str) -> str:
     if not url:
         return "image/jpeg"
-    u = url.lower().split("?")[0].split("#")[0]
+    u = url.split("?", 1)[0].split("#", 1)[0].lower()
     for ext, m in MIME_BY_EXT.items():
         if u.endswith(ext):
             return m
     return "image/jpeg"
+# --- simple heuristics to detect release-like text ---
+RAR_RE = re.compile(r"\.rar\b", flags=re.I)
 
-
-# --- helper fetch function (use everywhere instead of session.get directly) ---
-def fetch_url(url, timeout=12, allow_cloudscraper=True, debug=False):
-    """Use requests session first, fallback to cloudscraper on failure."""
-    time.sleep(random.uniform(0.05, 0.25))   # tiny jitter
-    try:
-        r = session.get(url, timeout=timeout, allow_redirects=True)
-        r.raise_for_status()
-        return r
-    except Exception as e:
-        if debug:
-            print("fetch_url: requests failed for", url, "error:", repr(e))
-            resp = getattr(e, "response", None)
-            if resp is not None:
-                print("Response head:", resp.status_code, resp.headers)
-                print(resp.text[:1000])
-        if allow_cloudscraper:
-            try:
-                scraper = cloudscraper.create_scraper(browser={'custom': HEADERS['User-Agent']})
-                r2 = scraper.get(url, timeout=timeout, allow_redirects=True)
-                r2.raise_for_status()
-                return r2
-            except Exception as e2:
-                if debug:
-                    print("fetch_url: cloudscraper fallback failed for", url, "error:", repr(e2))
-                raise
-        raise
-
-
-
-def parse_chap_num(text):
+def is_rar_like(text: str) -> bool:
     """
-    Return a numeric chapter value for sorting (float), or -1.0 if none found.
-    Handles integers and decimals like "12" or "12.5".
+    Return True for strings that look like release filenames or version tokens,
+    e.g. 'Young_King_Ours_2026-04.rar', 'Senki_v34.rar', 'v34', '2026-04.rar'.
     """
-    m = re.search(r'(\d+(?:\.\d+)?)', text)
-    return float(m.group(1)) if m else -1.0
-
-
-def extract_thumbnail(page_url, debug=False):
-    """Return best thumbnail URL found on page_url or None."""
-    r = fetch_url(page_url, timeout=12, allow_cloudscraper=True, debug=debug)
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    # 1) prefer og:image
-    og = soup.find("meta", property="og:image")
-    if og and og.get("content"):
-        return urljoin(page_url, og["content"].strip())
-
-    # 2) link rel=image_src
-    link_img = soup.find("link", rel="image_src")
-    if link_img and link_img.get("href"):
-        return urljoin(page_url, link_img["href"].strip())
-
-    # 3) check img tags for data-src/data-original/src
-    for img in soup.find_all("img"):
-        for attr in ("data-src", "data-original", "src"):
-            val = img.get(attr)
-            if val and val.strip() and "placeholder" not in val:
-                return urljoin(page_url, val.strip())
-
-    return None
-    
-def now_rfc2822():
-    return format_datetime(datetime.now(timezone.utc))
-
-def make_guid(text):
-    return "urn:sha1:" + hashlib.sha1(text.encode("utf-8")).hexdigest()
-
-def load_seen():
-    if os.path.exists(SEEN_FILE):
-        try:
-            with open(SEEN_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {"items": []}
-    return {"items": []}
-
-def save_seen(data):
-    with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-def http_get(url, timeout=20):
-    r = fetch_url(url, timeout=15, allow_cloudscraper=True, debug=True)
-    r.raise_for_status()
-    return r.text
-
-def normalize_url(u):
-    return u.rstrip('/')
-
-from urllib.parse import urlparse, urljoin
-
-ID_RE = re.compile(r"/manga/(\d+)[-/]?", re.IGNORECASE)
-
-def assemble_title(scraped_title, link, site_title=None):
-    """
-    Prefer a scraped title only when it looks like a real series name.
-    If scraped_title is just a chapter token (e.g. "Chapter 42", "Ch. 42"),
-    prefer the canonical site_title or the URL slug instead, then append chapter.
-    """
-    # helper: decide whether scraped_title is useful (not just "Chapter N")
-    def scraped_is_useful(s):
-        if not s:
-            return False
-        s = s.strip()
-        # if it starts with "chapter", "chap", "ch" followed by digits, it's not useful
-        if re.match(r'^\s*(?:chapter|chap|ch)\b', s, flags=re.I):
-            return False
-        # if it's very short (1-2 words) and contains only "chapter" + number, reject
-        words = s.split()
-        if len(words) <= 2 and re.search(r'\d', s) and any(re.match(r'^(?:chapter|chap|ch)\b', w, flags=re.I) for w in words):
-            return False
-        # otherwise accept
+    if not text:
+        return False
+    t = text.strip()
+    # obvious .rar filename
+    if RAR_RE.search(t):
         return True
+    # date-like YYYY-MM or YYYY_MM
+    if re.search(r"\b20\d{2}[-_.]?(0[1-9]|1[0-2])\b", t):
+        return True
+    # vNN pattern
+    if re.search(r"\bv\s?0*[0-9]+\b", t, flags=re.I):
+        return True
+    # trailing numeric tokens like _34 or -34 or v34
+    if re.search(r"[_\-\s]v?0*[0-9]{1,6}\b", t, flags=re.I):
+        return True
+    return False
 
-    # choose base: prefer useful scraped_title, else site_title, else slug
-    if scraped_title and scraped_is_useful(scraped_title):
-        base = strip_leading_id(scraped_title.strip())
-    else:
-        base = strip_leading_id(site_title or '') if site_title else title_from_link(link) or ''
+# -----------------------
+# Parsing/version heuristics
+# -----------------------
+DATE_RE = re.compile(r"(20\d{2})[._-]?(0[1-9]|1[0-2])")
+VNUM_RE = re.compile(r"\bv\s?0*([0-9]+)\b", flags=re.I)
+TRAIL_NUM_RE = re.compile(r"[_\-\s]v?0*([0-9]+)(?:\.[a-zA-Z0-9]+)?$", flags=re.I)
+RAR_RE = re.compile(r"\.rar\b", flags=re.I)
 
-    # append chapter suffix if not already present
-    chap = extract_chapter_from_link(link)
-    if chap and not re.search(r'chapter\s*\d+', base, flags=re.I):
-        final = (base + chap).strip()
-    else:
-        final = base.strip()
+# --- normalize candidate text (strip mirror noise) ---
+def normalize_candidate_text(s: str) -> str:
+    if not s:
+        return ""
+    t = s.strip()
+    # remove common mirror host suffixes like "(uploaded by ...)" or "[host]" or trailing " - host"
+    t = re.sub(r"\(.*?\)$", "", t)
+    t = re.sub(r"\[.*?\]$", "", t)
+    t = re.sub(r"-\s*uploaded.*$", "", t, flags=re.I)
+    t = re.sub(r"\s+[-–—]\s+.*$", "", t)  # remove trailing " - something"
+    t = t.strip(" \t\n\r\"'_-")
+    return t
 
-    # final fallback: if still empty, use slug (without removing numbers)
-    if not final:
-        final = title_from_link(link) or ''
-    return final
 
-
-# --- Title and site helpers (insert after ID_RE) ---
-def domain_of(url):
-    try:
-        return urlparse(url).netloc.lower()
-    except Exception:
-        return ''
-
-def find_site_for_link(link, SITES):
-    """Return the SITES entry that best matches link (domain first, then substring)."""
-    if not link:
-        return None
-    d = domain_of(link)
-    # domain match
-    for s in SITES:
-        if domain_of(s.get('url', '')) == d:
-            return s
-    # substring match (listing URL inside chapter URL)
-    for s in SITES:
-        u = s.get('url', '').rstrip('/')
-        if u and u in link:
-            return s
-    return None
-
-def extract_chapter_from_link(link):
+# --- improved version key extraction (numeric, prefer largest vN) ---
+def extract_version_key(title: str):
     """
-    Return a string like ' — Chapter 94' when a chapter number is found in the URL.
-    Returns empty string if none found.
+    Return a tuple for comparison. Higher tuple sorts later (newer).
+    Priority:
+      3 -> date-like YYYY-MM (year, month)
+      2 -> vNN (use max v found)
+      1 -> any numeric tokens (use max number)
+      0 -> fallback (string)
     """
-    if not link:
-        return ''
-    m = re.search(r'chapter[-_/ ]?(\d+(?:\.\d+)?)', link, flags=re.I)
-    if not m:
-        m = re.search(r'/chapters/(\d+(?:\.\d+)?)', link, flags=re.I)
+    t = normalize_candidate_text(title or "")
+    # date-like YYYY-MM
+    m = DATE_RE.search(t)
     if m:
-        try:
-            return f' — Chapter {int(float(m.group(1)))}'
-        except Exception:
-            return f' — Chapter {m.group(1)}'
-    return ''
+        year = int(m.group(1)); month = int(m.group(2))
+        return (3, year, month, t)
 
-def strip_leading_id(title):
-    """Remove a leading numeric id like '119653 ' or '119653-' but keep everything else."""
-    if not title:
-        return title
-    t = title.strip()
-    # remove leading digits + optional separator
-    t = re.sub(r'^\s*\d+\s*[-_:]?\s*', '', t)
-    return re.sub(r'\s+', ' ', t).strip()
+    # collect all vN occurrences and pick the largest
+    # allow separators like start, space, underscore, or hyphen before 'v'
+    vnums = [int(x) for x in re.findall(r"(?:^|[_\-\s])v\s?0*([0-9]+)\b", t, flags=re.I)]
+    if vnums:
+        return (2, max(vnums), t)
 
-def title_from_link(link):
-    """Fallback: derive a readable base title from the URL slug."""
-    if not link:
-        return None
-    parts = [p for p in urlparse(link).path.split('/') if p]
-    candidate = parts[-2] if len(parts) >= 2 else parts[-1]
-    candidate = re.sub(r'^\d+[-_]*', '', candidate)
-    candidate = candidate.replace('-', ' ').replace('_', ' ')
-    candidate = re.sub(r'\s+', ' ', candidate).strip()
-    return candidate.title() if candidate else None
-# --- end helpers ---
+    # collect any numeric tokens and pick the largest
+    # look for numbers preceded by separator or start to avoid matching years inside words
+    nums = [int(x) for x in re.findall(r"(?:^|[_\-\s])0*([0-9]{1,6})\b", t)]
+    if nums:
+        return (1, max(nums), t)
 
+    # fallback: use the raw normalized title (lowest priority)
+    return (0, 0, t)
 
-def find_latest_chapter(page_url, title=None, debug=False):
-    """
-    Parse the listing page and return the best candidate dict:
-    { "url": "...", "text": "...", "score": float } or None.
-    """
-    try:
-        rpage = fetch_url(page_url, timeout=12, allow_cloudscraper=True, debug=debug)
-        rpage.raise_for_status()
-        page_html = rpage.text
-        canonical_page_url = normalize_url(rpage.url)
-    except Exception:
-        # fallback to a simpler GET (will raise if it fails)
-        page_html = http_get(page_url)
-        canonical_page_url = normalize_url(page_url)
-    # If the response looks like a Cloudflare challenge page, try cloudscraper once
-    # (check headers and a short snippet of the body)
-    cf_challenge = False
-    try:
-        hdrs = getattr(rpage, "headers", {}) or {}
-        body_head = (page_html or "")[:512].lower()
-        if hdrs.get("Cf-Mitigated") or "just a moment" in body_head or "cf-challenge" in body_head:
-            cf_challenge = True
-    except Exception:
-        cf_challenge = False
-
-    if cf_challenge:
-        if debug:
-            print("DEBUG: Detected Cloudflare challenge; retrying with cloudscraper for", page_url)
-        try:
-            scraper = cloudscraper.create_scraper(browser={'custom': HEADERS['User-Agent']})
-            rpage2 = scraper.get(page_url, timeout=12, allow_redirects=True)
-            rpage2.raise_for_status()
-            page_html = rpage2.text
-            canonical_page_url = normalize_url(rpage2.url)
-            if debug:
-                print("DEBUG: cloudscraper succeeded, using fetched page")
-        except Exception as e:
-            if debug:
-                print("DEBUG: cloudscraper retry failed:", repr(e))
-            # fall back to whatever we already have (challenge page) — but continue
-
-    soup = BeautifulSoup(page_html, "html.parser")
+# --- improved dlraw index parsing: inspect anchor text and href filename ---
+def parse_dlraw_index(html: str, base_url: str):
+    soup = BeautifulSoup(html, "html.parser")
     candidates = []
 
-    # extract numeric id from canonical page URL
-    m_id = ID_RE.search(canonical_page_url)
-    expected_id = m_id.group(1) if m_id else None
-
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        full = urljoin(canonical_page_url, href)
-        text = a.get_text(" ", strip=True) or ""
-
-        # quick filters
-        is_chapter_url = bool(re.search(r"(?:/chapter/|/read/|/c/|chapter-|chap-|\bchapter\b|\bchap\b|\bch\b|/page/)", full, re.IGNORECASE))
-        is_chapter_text = bool(re.search(r"(?:chapter|chap|ch)\s*\d", text, re.IGNORECASE))
-        is_listing_page = bool(re.search(r"/(?:manga|manhwa|manhua)/[^/]+(?:$|/|[-]\d{4}(?:$|/))", full, re.IGNORECASE))
-
-        if is_listing_page and not (is_chapter_url or is_chapter_text):
+    # 1) anchors: inspect both anchor text and href last path segment
+    for a in soup.find_all("a"):
+        text = (a.get_text() or "").strip()
+        href = a.get("href") or ""
+        # normalize and test anchor text
+        nt = normalize_candidate_text(text)
+        if nt and is_rar_like(nt):
+            candidates.append({"title": nt, "link": base_url, "thumb": None})
             continue
-        if not (is_chapter_url or is_chapter_text or re.search(r"\d", full)):
-            continue
-
-                # extract numeric tokens from the candidate URL (in order)
-        url_nums = re.findall(r"(\d+(?:\.\d+)?)", full)
-
-        # helper tests
-        def is_year_token(n):
-            try:
-                v = int(float(n)); return 1900 <= v <= 2100
-            except Exception:
-                return False
-
-        def is_timestamp_token(n):
-            try:
-                v = int(float(n)); return v >= 1_000_000_000
-            except Exception:
-                return False
-
-        # drop year-like, epoch-like, extremely large tokens, and the manga id itself
-        filtered_nums = []
-        for n in url_nums:
-            try:
-                iv = int(float(n))
-            except Exception:
-                continue
-            if expected_id and iv == int(expected_id):
-                # skip the manga id token — not a chapter number
-                continue
-            if is_year_token(n):
-                continue
-            if is_timestamp_token(n):
-                continue
-            if iv >= 1_000_000:   # safety threshold for absurdly large IDs
-                continue
-            filtered_nums.append(n)
-
-        # 1) Prefer explicit chapter patterns in the URL (chapter-123, /chapter/123, /c/123)
-        chap_num = None
-        m_after = re.search(r"(?:chapter|chap|read|page|c)[^0-9]{0,6}(\d+(?:\.\d+)?)", full, re.IGNORECASE)
-        if m_after:
-            try:
-                cand = m_after.group(1)
-                if not (expected_id and int(float(cand)) == int(expected_id)):
-                    chap_num = float(cand)
-            except Exception:
-                chap_num = None
-
-        # 2) Prefer numbers in the anchor text (e.g., "Chapter 43")
-        if chap_num is None:
-            m_text = re.search(r"(?:chapter|chap|ch)[^\d]{0,6}(\d+(?:\.\d+)?)", text, re.IGNORECASE)
-            if m_text:
-                try:
-                    cand = m_text.group(1)
-                    if not (expected_id and int(float(cand)) == int(expected_id)):
-                        chap_num = float(cand)
-                except Exception:
-                    chap_num = None
-
-        # 3) Fallback to last reasonable numeric token from the filtered URL tokens
-        if chap_num is None and filtered_nums:
-            try:
-                chap_num = float(filtered_nums[-1])
-            except Exception:
-                chap_num = None
-
-        # 4) Final sanity checks: reject year-like or absurdly large numbers
-        if chap_num is not None:
-            try:
-                n = int(float(chap_num))
-            except Exception:
-                n = None
-            if n is None or (1900 <= n <= 2100) or n >= 1000000:
-                chap_num = None
-
-        if chap_num is None:
-            continue
-
-
-        # Strict ID check: require the page's numeric manga id to appear in candidate URL
-        if expected_id and expected_id not in full:
-            title_words = [w.lower() for w in (title or "").split()[:3]]
-            if not any(w for w in title_words if w and w in text.lower()):
+        # inspect href last segment (filename)
+        if href:
+            last = href.split("/")[-1].strip()
+            last = normalize_candidate_text(last)
+            if last and is_rar_like(last):
+                candidates.append({"title": last, "link": base_url, "thumb": None})
                 continue
 
-        boost = 0.1 if title and any(w.lower() in text.lower() for w in title.split()[:3]) else 0.0
-
-        candidates.append({
-            "url": normalize_url(full),
-            "text": text,
-            "score": chap_num + boost
-        })
-
-    if debug:
-        print("DEBUG canonical_page_url:", canonical_page_url)
-        print("DEBUG expected_id:", expected_id)
-        print("DEBUG candidate count:", len(candidates))
-        for c in sorted(candidates, key=lambda x: x['score'], reverse=True)[:12]:
-            print("DEBUG CAND:", c['score'], c['url'], repr(c['text'][:80]))
-
+    # 2) fallback: text nodes (if no anchor candidates found)
     if not candidates:
+        for tag in soup.find_all(string=True):
+            txt = tag.strip()
+            if not txt:
+                continue
+            nt = normalize_candidate_text(txt)
+            if nt and is_rar_like(nt):
+                candidates.append({"title": nt, "link": base_url, "thumb": None})
+
+    # 3) fallback: page title
+    if not candidates:
+        page_title = soup.title.string.strip() if soup.title and soup.title.string else None
+        if page_title:
+            candidates.append({"title": normalize_candidate_text(page_title), "link": base_url, "thumb": None})
+
+    # 4) find a thumbnail (first reasonable <img>)
+    thumb = None
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src") or ""
+        if not src:
+            continue
+        thumb = urljoin(base_url, src)
+        break
+
+    if thumb:
+        for c in candidates:
+            c["thumb"] = thumb
+
+    return candidates
+
+
+# --- gather latest (single, robust implementation) ---
+def gather_latest_from_site(site: dict) -> dict | None:
+    url = site["url"]
+    html = fetch_page(url)
+    if not html:
+        logging.debug("Failed to fetch %s", url)
         return None
 
-    best = max(candidates, key=lambda x: x["score"])
+    candidates = parse_dlraw_index(html, url)
+    if not candidates:
+        logging.debug("No candidates found on %s", url)
+        return None
 
-    # follow redirects for the chosen chapter URL and normalize
-    try:
-        rfinal = fetch_url(best["url"], timeout=12, allow_cloudscraper=True, debug=debug)
-        final_url = normalize_url(rfinal.url)
-    except Exception:
-        final_url = normalize_url(best["url"])
+    # debug: show all candidates and their keys
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug("Candidates for %s:", url)
+        for c in candidates:
+            logging.debug("  %r -> key=%r", c["title"], extract_version_key(c["title"]))
 
-    best["url"] = final_url
-    return best
+    # pick the newest candidate by our version key
+    best = None
+    best_key = None
+    for c in candidates:
+        key = extract_version_key(c["title"])
+        if best is None or key > best_key:
+            best = c
+            best_key = key
 
-def normalize_item(it, site=None, scraped_title=None):
-    now = now_rfc2822()
-    title = (it.get("title") or "").strip()
-    if not title:
-        title = assemble_title(scraped_title, it.get("link", ""), site.get("title") if site else None)
+    # debug: chosen best
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug("Chosen best for %s: %r key=%r", url, best["title"] if best else None, best_key)
 
-    description = it.get("description")
-    if description is None:
-        description = ""
+    if best is None:
+        return None
 
-    guid = it.get("guid") or make_guid(it.get("link", ""))
+    title = best["title"]
+    guid = make_guid(url, title)
+    pubDate = now_rfc2822()
+    thumb = best.get("thumb") or site.get("thumb") or ""
+    desc_html = (
+        f'<a href="{url}">'
+        f'<img src="{thumb}" alt="{title}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
+        f'</a>'
+        f'<div><a href="{url}">{site.get("title") or url}</a><br/>{title}</div>'
+    )
     return {
         "title": title,
-        "link": it.get("link", ""),
+        "link": url,
         "guid": guid,
-        "pubDate": it.get("pubDate", now),
-        "description": description,
-        "image": it.get("image", ""),
+        "pubDate": pubDate,
+        "description": desc_html,
+        "image": thumb,
     }
 
 
 
 
+# -----------------------
+# Feed and seen handling
+# -----------------------
+def load_seen(path: str) -> dict:
+    if not os.path.exists(path):
+        return {"items": []}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"items": []}
+
+def save_seen(path: str, seen: dict):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(seen, f, indent=2, ensure_ascii=False)
+
+def make_guid(site_url: str, title: str) -> str:
+    return f"{site_url}|{title}"
+
+def now_rfc2822():
+    return format_datetime(datetime.now(timezone.utc))
 
 def write_rss(channel_title, channel_link, channel_desc, items, out_file):
+    """
+    Write a simple RSS 2.0 feed to out_file.
+    - channel_title, channel_link, channel_desc: strings
+    - items: list of dicts with keys: title, link, guid, pubDate, description, image
+    """
     items = items[:MAX_ITEMS]
-    header = (
-        '<?xml version="1.0" encoding="utf-8"?>\n'
-        '<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">\n'
-        "  <channel>\n"
-        f"    <title>{escape(channel_title)}</title>\n"
-        f"    <link>{escape(channel_link)}</link>\n"
-        f"    <description>{escape(channel_desc)}</description>\n"
-        f"    <lastBuildDate>{now_rfc2822()}</lastBuildDate>\n"
-    )
 
-    # optional channel-level image (use first item's image if present)
+    # build raw XML string (use CDATA for description so HTML is preserved)
+    parts = []
+    parts.append('<?xml version="1.0" encoding="utf-8"?>')
+    parts.append('<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">')
+    parts.append('  <channel>')
+    parts.append(f'    <title>{escape(channel_title)}</title>')
+    parts.append(f'    <link>{escape(channel_link)}</link>')
+    parts.append(f'    <description>{escape(channel_desc)}</description>')
+    parts.append(f'    <lastBuildDate>{now_rfc2822()}</lastBuildDate>')
+
+    # optional channel image from first item
     if items and items[0].get("image"):
-        header += f'    <image><url>{escape(items[0]["image"])}</url><title>{escape(channel_title)}</title><link>{escape(channel_link)}</link></image>\n'
+        parts.append('    <image>')
+        parts.append(f'      <url>{escape(items[0]["image"])}</url>')
+        parts.append(f'      <title>{escape(channel_title)}</title>')
+        parts.append(f'      <link>{escape(channel_link)}</link>')
+        parts.append('    </image>')
 
-    items_xml = ""
     for it in items:
-        title_text = it.get('title') or ''
-        items_xml += "    <item>\n"
-        items_xml += f"      <title>{escape(title_text)}</title>\n"
-        items_xml += f"      <link>{escape(it.get('link',''))}</link>\n"
-        items_xml += f"      <guid isPermaLink=\"false\">{escape(it.get('guid',''))}</guid>\n"
-        items_xml += f"      <pubDate>{escape(it.get('pubDate',''))}</pubDate>\n"
+        title = escape(it.get("title", ""))
+        link = escape(it.get("link", ""))
+        guid = escape(it.get("guid", ""))
+        pubDate = it.get("pubDate", "")
+        image = it.get("image", "")
+        # description may contain HTML; wrap in CDATA
+        desc = it.get("description", "")
+        # ensure CDATA does not contain "]]>" — if it does, fall back to escaped text
+        if "]]>" in desc:
+            desc_block = escape(desc)
+        else:
+            desc_block = f"<![CDATA[{desc}]]>"
 
-        img_url = it.get("image") or ""
-        if img_url:
-            img_type = mime_for_url(img_url)
-            items_xml += f'      <media:thumbnail url="{escape(img_url)}" />\n'
-            items_xml += f'      <media:content url="{escape(img_url)}" medium="image" type="{escape(img_type)}" />\n'
-            items_xml += f'      <enclosure url="{escape(img_url)}" type="{escape(img_type)}" />\n'
+        parts.append('    <item>')
+        parts.append(f'      <title>{title}</title>')
+        parts.append(f'      <link>{link}</link>')
+        parts.append(f'      <guid isPermaLink="false">{guid}</guid>')
+        parts.append(f'      <pubDate>{pubDate}</pubDate>')
+        if image:
+            parts.append(f'      <media:thumbnail url="{escape(image)}" />')
+            parts.append(f'      <enclosure url="{escape(image)}" type="{escape(mime_for_url(image))}" />')
+        parts.append(f'      <description>{desc_block}</description>')
+        parts.append('    </item>')
 
-        items_xml += f"      <description><![CDATA[{it.get('description','')}]]></description>\n"
-        items_xml += "    </item>\n"
+    parts.append('  </channel>')
+    parts.append('</rss>')
 
-    footer = "  </channel>\n</rss>\n"
+    raw = "\n".join(parts).encode("utf-8")
 
-    tmp = out_file + '.tmp'
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(header + items_xml + footer)
+    # pretty-print using minidom (works reliably across Python versions)
+    try:
+        dom = minidom.parseString(raw)
+        pretty = dom.toprettyxml(indent="  ", encoding="utf-8")
+    except Exception:
+        # fallback: write raw if minidom fails
+        pretty = raw
 
-    # validate XML (will raise if malformed)
-    ET.parse(tmp)
+    # atomic write to out_file
+    dirpath = os.path.dirname(out_file) or "."
+    with tempfile.NamedTemporaryFile("wb", dir=dirpath, delete=False) as tf:
+        tf.write(pretty)
+        tempname = tf.name
+    os.replace(tempname, out_file)
 
-    # atomic replace
-    os.replace(tmp, out_file)
+def build_rss(items: list[dict], out_file: str):
+    """
+    Backwards-compatible wrapper so existing code that calls build_rss
+    continues to work while using the new write_rss implementation.
+    """
+    # write_rss expects channel title/link/description first
+    return write_rss(FEED_TITLE, FEED_LINK, FEED_DESC, items, out_file)
 
 
 
-def main():
-    seen = load_seen()
-    history = seen.get("items", [])
-    if not isinstance(history, list):
-        history = []
+def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items: int = MAX_ITEMS, debug: bool = False):
+    # load seen and build a set of GUIDs that were seen before this run
+    seen = load_seen(seen_file)
+    prev_seen_guids = set()
+    for it in seen.get("items", []):
+        if isinstance(it, str):
+            prev_seen_guids.add(it)
+        elif isinstance(it, dict):
+            prev_seen_guids.add(it.get("guid"))
 
-    for site in SITES:
-        title = site.get("title")
-        page = site.get("url")
-        thumb = site.get("image", "")
-        print(f"Checking {title} -> {page}")
-        try:
-            latest = find_latest_chapter(page, title, debug=True)
-        except Exception as e:
-            print("  Error scraping:", e)
-            latest = None
+    new_items = []
+    newly_added_guids = []
 
+    for site in sites:
+        if debug:
+            logging.info("Checking site: %s", site["url"])
+        latest = gather_latest_from_site(site)
         if not latest:
-            print("  No chapter links found; skipping.")
-            # normalize any existing entry for this title
-            for i, it in enumerate(history):
-                if it.get("title") == title:
-                    history[i] = normalize_item(it)
+            if debug:
+                logging.info("No latest found for %s", site["url"])
             continue
 
-        chapter_url = latest["url"]
-        score = latest.get("score")
-                # use stable GUID per chapter URL
-        guid = make_guid(chapter_url)
+        # include latest in merged feed
+        new_items.append(latest)
 
-               # assemble final title (prefer scraped text, else site title, else slug)
-        scraped_text = latest.get("text") or None
-        final_title = assemble_title(scraped_text, chapter_url, title)
+        # if unseen before, record it and mark as newly added
+        if latest["guid"] not in prev_seen_guids:
+            # record as seen with timestamp
+            seen.setdefault("items", []).append({"guid": latest["guid"], "seen_at": datetime.now(timezone.utc).isoformat()})
+            newly_added_guids.append(latest["guid"])
 
-        # build the HTML description we use for new items and for updates
-        description_from_latest = (
-            f'<a href="{escape(chapter_url)}">'
-            f'<img src="{escape(thumb)}" alt="{escape(title)}" '
-            f'style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
-            f'</a>'
-            f'<div><a href="{escape(page)}">{escape(title)}</a><br/>{escape(latest.get("text",""))}</div>'
-        )
+    # merged = newest-per-site only (no history)
+    merged = []
+    seen_merge = set()
+    for it in new_items:
+        if it["guid"] not in seen_merge:
+            merged.append(it)
+            seen_merge.add(it["guid"])
+    merged = merged[:max_items]
 
-        already = any(it.get("guid") == guid for it in history)
-        if already:
-            print("  No new chapter.")
-            # update existing entry link/image/pubDate and restore title/description if empty
-            for i, it in enumerate(history):
-                if it.get("title") == title or it.get("guid") == guid:
-                    it["link"] = chapter_url
-                    it["image"] = thumb
-                    it["pubDate"] = it.get("pubDate", now_rfc2822())
-                    # restore title if missing or empty
-                    if not (it.get("title") or "").strip():
-                        it["title"] = final_title
-                    # restore description only if missing or empty
-                    if not (it.get("description") or "").strip():
-                        it["description"] = description_from_latest
-                    history[i] = normalize_item(it, site=site, scraped_title=scraped_text)
-            continue
+    # write rss and seen (preserve the seen structure we built)
+    build_rss(merged, rss_file)
+    save_seen(seen_file, seen)
+
+    return {"added": newly_added_guids, "total": len(merged)}
 
 
+# -----------------------
+# CLI
+# -----------------------
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--debug", action="store_true", help="Verbose logging")
+    p.add_argument("--max", type=int, default=MAX_ITEMS, help="Maximum items to keep in rss.xml")
+    args = p.parse_args()
 
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-
-        # new chapter -> prepend
-        pubDate = now_rfc2822()
-        description = (
-            f'<a href="{escape(chapter_url)}">'
-            f'<img src="{escape(thumb)}" alt="{escape(title)}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
-            f'</a>'
-            f'<div><a href="{escape(page)}">{escape(title)}</a><br/>{escape(latest.get("text",""))}</div>'
-        )
-        item = {
-            "title": final_title,
-            "link": chapter_url,
-            "guid": guid,
-            "pubDate": pubDate,
-            "description": description,
-            "image": thumb,
-        }
-        print("  New chapter detected:", chapter_url)
-        history.insert(0, normalize_item(item, site=site, scraped_title=scraped_text))
-    
-    history = [normalize_item(it) for it in history][:MAX_ITEMS]
-
-            # Backfill descriptions by canonical link (one-time migration to prefer non-empty descriptions)
-    by_link = {}
-    for it in history:
-        link = it.get("link", "") or ""
-        if not link:
-            continue
-        desc = (it.get("description") or "").strip()
-        # prefer an item that has a non-empty description
-        if link not in by_link or (desc and not (by_link[link].get("description") or "").strip()):
-            by_link[link] = it
-
-    # Apply backfill: copy the best description to other items with the same link
-    for it in history:
-        link = it.get("link", "") or ""
-        if not link:
-            continue
-        best = by_link.get(link)
-        if best:
-            best_desc = (best.get("description") or "").strip()
-            if best_desc and not (it.get("description") or "").strip():
-                it["description"] = best_desc
-
-
-        # Optionally re-run your dedupe/canonicalization after this
-        seen["items"] = [normalize_item(it) for it in seen.get("items", [])][:MAX_ITEMS]
-        save_seen(seen)
-
-
-    # --- canonicalize GUIDs and dedupe history by chapter URL ---
-    def is_chapter_only_title(t):
-        if not t:
-            return True
-        t = t.strip()
-        return bool(re.match(r'^\s*(?:chapter|chap|ch)[\.\s\-]*\d+', t, flags=re.I))
-
-    seen_by_guid = {}
-    # iterate in current order (newest first) and pick the best item per canonical guid
-    for it in history:
-        link = it.get("link", "") or ""
-        if not link:
-            continue
-        canonical_guid = make_guid(link)
-        existing = seen_by_guid.get(canonical_guid)
-
-        if existing is None:
-            copy_it = dict(it)
-            copy_it["guid"] = canonical_guid
-            seen_by_guid[canonical_guid] = copy_it
-            continue
-
-        # decide which item is better: prefer non-chapter-only title, then non-empty description, then longer title
-        cur_title = (existing.get("title") or "").strip()
-        new_title = (it.get("title") or "").strip()
-        cur_bad = is_chapter_only_title(cur_title)
-        new_bad = is_chapter_only_title(new_title)
-
-        # description preference
-        cur_desc = (existing.get("description") or "").strip()
-        new_desc = (it.get("description") or "").strip()
-        cur_bad_desc = not cur_desc
-        new_bad_desc = not new_desc
-
-        # choose replacement when new item is strictly better
-        replace = False
-        if cur_bad and not new_bad:
-            replace = True
-        elif cur_bad == new_bad:
-            # prefer item with a non-empty description
-            if cur_bad_desc and not new_bad_desc:
-                replace = True
-            elif cur_bad_desc == new_bad_desc:
-                # tie-breaker: prefer longer title
-                if len(new_title) > len(cur_title):
-                    replace = True
-
-        if replace:
-            copy_it = dict(it)
-            copy_it["guid"] = canonical_guid
-            seen_by_guid[canonical_guid] = copy_it
-
-    # rebuild history preserving original order (newest first)
-    new_history = []
-    for it in history:
-        link = it.get("link", "") or ""
-        if not link:
-            continue
-        canonical_guid = make_guid(link)
-        item = seen_by_guid.pop(canonical_guid, None)
-        if item:
-            new_history.append(item)
-
-    history = new_history[:MAX_ITEMS]
-    # final normalize pass that will not clobber titles/descriptions (ensure normalize_item is conservative)
-    history = [normalize_item(it) for it in history]
-    seen["items"] = history
-    save_seen(seen)
-
-
-
-    print("=== DESCRIPTION PREVIEW ===")
-    for i, it in enumerate(history[:20]):
-        print(i, "guid=", it.get("guid"), "title=", repr(it.get("title")), "desc_len=", len((it.get("description") or "").strip()))
-    print("===========================")
-  
-
-    write_rss(
-        channel_title="My Manga Watchlist",
-        channel_link="https://example.com/",
-        channel_desc="Auto-generated manga feed for Fluent Reader",
-        items=history,
-        out_file=RSS_FILE,
-    )
-    print(f"Wrote {RSS_FILE} with {len(history)} items.")
-
+    try:
+        res = update_feed_once(SITES, RSS_FILE, SEEN_FILE, max_items=args.max, debug=args.debug)
+        logging.info("Run complete. Result: %s", res)
+        return 0
+    except Exception as e:
+        logging.exception("Error during update: %s", e)
+        return 1
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

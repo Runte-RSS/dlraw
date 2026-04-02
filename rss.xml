@@ -1,100 +1,119 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+<rss xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+  
+  
   <channel>
-    <title>My Manga Watchlist</title>
+    
+    
+    <title>DL-Raw Watchlist</title>
+    
+    
     <link>https://example.com/</link>
-    <description>Auto-generated manga feed for Fluent Reader</description>
-    <lastBuildDate>Mon, 30 Mar 2026 14:12:26 +0000</lastBuildDate>
-    <image><url>https://cdn.anisearch.com/images/manga/cover/76/76700_600.webp</url><title>My Manga Watchlist</title><link>https://example.com/</link></image>
+    
+    
+    <description>Auto-generated manga feed (dlraw watcher)</description>
+    
+    
+    <lastBuildDate>Thu, 02 Apr 2026 20:44:49 +0000</lastBuildDate>
+    
+    
+    <image>
+      
+      
+      <url>https://i.imgur.com/IspDYkf.png</url>
+      
+      
+      <title>DL-Raw Watchlist</title>
+      
+      
+      <link>https://example.com/</link>
+      
+    
+    </image>
+    
+    
     <item>
-      <title>Nia Liston The Merciless Maiden — Chapter 42</title>
-      <link>https://mangamirror.com/manga/107322-nia-liston-the-merciless-maiden/chapter-42</link>
-      <guid isPermaLink="false">urn:sha1:1dfeb6dd7d0066e3c2783215215e56fa302c833a</guid>
-      <pubDate>Mon, 30 Mar 2026 11:29:06 +0000</pubDate>
-      <media:thumbnail url="https://cdn.anisearch.com/images/manga/cover/76/76700_600.webp" />
-      <media:content url="https://cdn.anisearch.com/images/manga/cover/76/76700_600.webp" medium="image" type="image/webp" />
-      <enclosure url="https://cdn.anisearch.com/images/manga/cover/76/76700_600.webp" type="image/webp" />
-      <description><![CDATA[<a href="https://mangamirror.com/manga/107322-nia-liston-the-merciless-maiden/chapter-42"><img src="https://cdn.anisearch.com/images/manga/cover/76/76700_600.webp" alt="Nia Liston: The Merciless Maiden" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://mangamirror.com/manga/107322-nia-liston-the-merciless-maiden">Nia Liston: The Merciless Maiden</a><br/>Chapter 42</div>]]></description>
+      
+      
+      <title>Young_King_Ours_2026-04.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E3%83%A4%E3%83%B3%E3%82%B0%E3%82%AD%E3%83%B3%E3%82%B0%E3%82%A2%E3%83%AF%E3%83%BC%E3%82%BA/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E3%83%A4%E3%83%B3%E3%82%B0%E3%82%AD%E3%83%B3%E3%82%B0%E3%82%A2%E3%83%AF%E3%83%BC%E3%82%BA/|Young_King_Ours_2026-04.rar.html</guid>
+      
+      
+      <pubDate>Thu, 02 Apr 2026 20:44:46 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://i.imgur.com/IspDYkf.png"/>
+      
+      
+      <enclosure url="https://i.imgur.com/IspDYkf.png" type="image/png"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E3%83%A4%E3%83%B3%E3%82%B0%E3%82%AD%E3%83%B3%E3%82%B0%E3%82%A2%E3%83%AF%E3%83%BC%E3%82%BA/"><img src="https://i.imgur.com/IspDYkf.png" alt="Young_King_Ours_2026-04.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E3%83%A4%E3%83%B3%E3%82%B0%E3%82%AD%E3%83%B3%E3%82%B0%E3%82%A2%E3%83%AF%E3%83%BC%E3%82%BA/">Young King Ours</a><br/>Young_King_Ours_2026-04.rar.html</div>]]></description>
+      
+    
     </item>
+    
+    
     <item>
-      <title>Black Killer Whale Baby — Chapter 94</title>
-      <link>https://mangamirror.com/manga/119653-black-killer-whale-baby/chapter-94</link>
-      <guid isPermaLink="false">urn:sha1:710db7b838bba96d21c8541dc1d352ad663a3103</guid>
-      <pubDate>Mon, 30 Mar 2026 11:29:05 +0000</pubDate>
-      <media:thumbnail url="https://cdn.novelupdates.com/images/2023/06/Black-Killer-Whale-Baby.jpg" />
-      <media:content url="https://cdn.novelupdates.com/images/2023/06/Black-Killer-Whale-Baby.jpg" medium="image" type="image/jpeg" />
-      <enclosure url="https://cdn.novelupdates.com/images/2023/06/Black-Killer-Whale-Baby.jpg" type="image/jpeg" />
-      <description><![CDATA[<a href="https://mangamirror.com/manga/119653-black-killer-whale-baby/chapter-94"><img src="https://cdn.novelupdates.com/images/2023/06/Black-Killer-Whale-Baby.jpg" alt="Black Killer Whale Baby" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://mangamirror.com/manga/119653-black-killer-whale-baby">Black Killer Whale Baby</a><br/>Chapter 94</div>]]></description>
+      
+      
+      <title>Youjo_Senki_v34.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/|Youjo_Senki_v34.rar.html</guid>
+      
+      
+      <pubDate>Thu, 02 Apr 2026 20:44:48 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://i.imgur.com/IspDYkf.png"/>
+      
+      
+      <enclosure url="https://i.imgur.com/IspDYkf.png" type="image/png"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/"><img src="https://i.imgur.com/IspDYkf.png" alt="Youjo_Senki_v34.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/">Youjo Senki</a><br/>Youjo_Senki_v34.rar.html</div>]]></description>
+      
+    
     </item>
+    
+    
     <item>
-      <title>The Billionaires Replacement Wife — Chapter 66</title>
-      <link>https://mangamirror.com/manga/95801-the-billionaires-replacement-wife/chapter-66</link>
-      <guid isPermaLink="false">urn:sha1:2e7e83dc441c86c3de23264896faf2d22ddfdcbe</guid>
-      <pubDate>Mon, 30 Mar 2026 11:29:04 +0000</pubDate>
-      <media:thumbnail url="https://us-a.tapas.io/sa/76/2546a686-8b25-4e18-bdb5-2306567d34da.jpg" />
-      <media:content url="https://us-a.tapas.io/sa/76/2546a686-8b25-4e18-bdb5-2306567d34da.jpg" medium="image" type="image/jpeg" />
-      <enclosure url="https://us-a.tapas.io/sa/76/2546a686-8b25-4e18-bdb5-2306567d34da.jpg" type="image/jpeg" />
-      <description><![CDATA[<a href="https://mangamirror.com/manga/95801-the-billionaires-replacement-wife/chapter-66"><img src="https://us-a.tapas.io/sa/76/2546a686-8b25-4e18-bdb5-2306567d34da.jpg" alt="The Billionaire’s Replacement Wife" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://mangamirror.com/manga/95801-the-billionaires-replacement-wife">The Billionaire’s Replacement Wife</a><br/>Chapter 66</div>]]></description>
+      
+      
+      <title>Isekai_Meikyu_de_Haremu_v12.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/|Isekai_Meikyu_de_Haremu_v12.rar.html</guid>
+      
+      
+      <pubDate>Thu, 02 Apr 2026 20:44:49 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://i.imgur.com/IspDYkf.png"/>
+      
+      
+      <enclosure url="https://i.imgur.com/IspDYkf.png" type="image/png"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/"><img src="https://i.imgur.com/IspDYkf.png" alt="Isekai_Meikyu_de_Haremu_v12.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/">Isekai Meikyuu de Harem wo</a><br/>Isekai_Meikyu_de_Haremu_v12.rar.html</div>]]></description>
+      
+    
     </item>
-    <item>
-      <title>Revenge Of The Sword Clans Hound — Chapter 155</title>
-      <link>https://mangamirror.com/manga/59511-revenge-of-the-sword-clans-hound/chapter-155</link>
-      <guid isPermaLink="false">urn:sha1:18a48660fb99dd8dc0fbfcee43e7bbf77763a105</guid>
-      <pubDate>Mon, 30 Mar 2026 11:29:02 +0000</pubDate>
-      <media:thumbnail url="https://bulbasaur.poke-black-and-white.net/covers/6851547b702284f834178357/cover_1752077533539.webp" />
-      <media:content url="https://bulbasaur.poke-black-and-white.net/covers/6851547b702284f834178357/cover_1752077533539.webp" medium="image" type="image/webp" />
-      <enclosure url="https://bulbasaur.poke-black-and-white.net/covers/6851547b702284f834178357/cover_1752077533539.webp" type="image/webp" />
-      <description><![CDATA[<a href="https://mangamirror.com/manga/59511-revenge-of-the-sword-clans-hound/chapter-155"><img src="https://bulbasaur.poke-black-and-white.net/covers/6851547b702284f834178357/cover_1752077533539.webp" alt="Revenge Of The Sword Clan's Hound" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://mangamirror.com/manga/59511-revenge-of-the-sword-clans-hound">Revenge Of The Sword Clan's Hound</a><br/>Chapter 155</div>]]></description>
-    </item>
-    <item>
-      <title>The Fox Eyed Villain Of The Demon Academy — Chapter 60</title>
-      <link>https://mangamirror.com/manga/127739-the-fox-eyed-villain-of-the-demon-academy/chapter-60</link>
-      <guid isPermaLink="false">urn:sha1:1c91baee7b8f084caa570e545f22a5ddaabe2ebf</guid>
-      <pubDate>Mon, 30 Mar 2026 11:29:01 +0000</pubDate>
-      <media:thumbnail url="https://static.asurascans.my/book/f47aadb5-8bff-4ba1-bece-66f0ec681c24/cover/b54fe4a9-a71f-400c-929a-2b1ef9b4c7dd.webp?width=400&amp;type=webp" />
-      <media:content url="https://static.asurascans.my/book/f47aadb5-8bff-4ba1-bece-66f0ec681c24/cover/b54fe4a9-a71f-400c-929a-2b1ef9b4c7dd.webp?width=400&amp;type=webp" medium="image" type="image/webp" />
-      <enclosure url="https://static.asurascans.my/book/f47aadb5-8bff-4ba1-bece-66f0ec681c24/cover/b54fe4a9-a71f-400c-929a-2b1ef9b4c7dd.webp?width=400&amp;type=webp" type="image/webp" />
-      <description><![CDATA[<a href="https://mangamirror.com/manga/127739-the-fox-eyed-villain-of-the-demon-academy/chapter-60"><img src="https://static.asurascans.my/book/f47aadb5-8bff-4ba1-bece-66f0ec681c24/cover/b54fe4a9-a71f-400c-929a-2b1ef9b4c7dd.webp?width=400&amp;type=webp" alt="The Fox-Eyed Villain of the Demon Academy" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://mangamirror.com/manga/127739-the-fox-eyed-villain-of-the-demon-academy">The Fox-Eyed Villain of the Demon Academy</a><br/>Chapter 60</div>]]></description>
-    </item>
-    <item>
-      <title>I Played The Role Of The Adopted Daughter Too Well — Chapter 118</title>
-      <link>https://mangamirror.com/manga/50583-i-played-the-role-of-the-adopted-daughter-too-well/chapter-118</link>
-      <guid isPermaLink="false">urn:sha1:78afd069b726d7b25ebb8addbfd1d7e10539089a</guid>
-      <pubDate>Mon, 30 Mar 2026 11:29:00 +0000</pubDate>
-      <media:thumbnail url="https://www.mangaread.org/wp-content/uploads/2023/09/28-1677642819-193x278.jpg" />
-      <media:content url="https://www.mangaread.org/wp-content/uploads/2023/09/28-1677642819-193x278.jpg" medium="image" type="image/jpeg" />
-      <enclosure url="https://www.mangaread.org/wp-content/uploads/2023/09/28-1677642819-193x278.jpg" type="image/jpeg" />
-      <description><![CDATA[<a href="https://mangamirror.com/manga/50583-i-played-the-role-of-the-adopted-daughter-too-well/chapter-118"><img src="https://www.mangaread.org/wp-content/uploads/2023/09/28-1677642819-193x278.jpg" alt="I Played the Role of the Adopted Daughter Too Well" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://mangamirror.com/manga/50583-i-played-the-role-of-the-adopted-daughter-too-well">I Played the Role of the Adopted Daughter Too Well</a><br/>Chapter 118</div>]]></description>
-    </item>
-    <item>
-      <title>Transmigrating Into The Cyber Game After Being On Top For Killing Boss — Chapter 44</title>
-      <link>https://mangamirror.com/manga/121372-transmigrating-into-the-cyber-game-after-being-on-top-for-killing-boss/chapter-44</link>
-      <guid isPermaLink="false">urn:sha1:67f14cf41a60d815f9fa2678a722e03d689d1c72</guid>
-      <pubDate>Mon, 30 Mar 2026 11:28:59 +0000</pubDate>
-      <media:thumbnail url="https://cdn.anime-planet.com/manga/primary/after-transmigrating-into-the-cyberpunk-game-i-defeated-the-boss-and-successfully-rose-to-the-top-1.webp?t=1759754015" />
-      <media:content url="https://cdn.anime-planet.com/manga/primary/after-transmigrating-into-the-cyberpunk-game-i-defeated-the-boss-and-successfully-rose-to-the-top-1.webp?t=1759754015" medium="image" type="image/webp" />
-      <enclosure url="https://cdn.anime-planet.com/manga/primary/after-transmigrating-into-the-cyberpunk-game-i-defeated-the-boss-and-successfully-rose-to-the-top-1.webp?t=1759754015" type="image/webp" />
-      <description><![CDATA[<a href="https://mangamirror.com/manga/121372-transmigrating-into-the-cyber-game-after-being-on-top-for-killing-boss/chapter-44"><img src="https://cdn.anime-planet.com/manga/primary/after-transmigrating-into-the-cyberpunk-game-i-defeated-the-boss-and-successfully-rose-to-the-top-1.webp?t=1759754015" alt="Transmigrating Into The Cyber Game After Being On Top For Killing Boss" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://mangamirror.com/manga/121372-transmigrating-into-the-cyber-game-after-being-on-top-for-killing-boss">Transmigrating Into The Cyber Game After Being On Top For Killing Boss</a><br/>Chapter 44</div>]]></description>
-    </item>
-    <item>
-      <title>Shut Up Evil Dragon I Dont Want To Raise A Child With You Anymore — Chapter 86</title>
-      <link>https://mangamirror.com/manga/122851-shut-up-evil-dragon-i-dont-want-to-raise-a-child-with-you-anymore/chapter-86</link>
-      <guid isPermaLink="false">urn:sha1:6e77ea579f8ef428f9ca09af4441eb24fcd41735</guid>
-      <pubDate>Mon, 30 Mar 2026 11:28:57 +0000</pubDate>
-      <media:thumbnail url="https://media.manhuabuddy.com/files/images/thumbs/shut-up-evil-dragon-i-dont-want-to-raise-a-child-with-you-anymore.webp" />
-      <media:content url="https://media.manhuabuddy.com/files/images/thumbs/shut-up-evil-dragon-i-dont-want-to-raise-a-child-with-you-anymore.webp" medium="image" type="image/webp" />
-      <enclosure url="https://media.manhuabuddy.com/files/images/thumbs/shut-up-evil-dragon-i-dont-want-to-raise-a-child-with-you-anymore.webp" type="image/webp" />
-      <description><![CDATA[<a href="https://mangamirror.com/manga/122851-shut-up-evil-dragon-i-dont-want-to-raise-a-child-with-you-anymore/chapter-86"><img src="https://media.manhuabuddy.com/files/images/thumbs/shut-up-evil-dragon-i-dont-want-to-raise-a-child-with-you-anymore.webp" alt="Shut Up, Evil Dragon! I don’t want to raise a child with you anymore" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://mangamirror.com/manga/122851-shut-up-evil-dragon-i-dont-want-to-raise-a-child-with-you-anymore">Shut Up, Evil Dragon! I don’t want to raise a child with you anymore</a><br/>Chapter 86 Mar 26, 2026</div>]]></description>
-    </item>
-    <item>
-      <title>One Piece Chapter 1178 A Fading Nightmare</title>
-      <link>https://tcbonepiecechapters.com/chapters/7974/one-piece-chapter-1178</link>
-      <guid isPermaLink="false">urn:sha1:16f32c5b610209725edb7b12a7f1b7867bcf0cfc</guid>
-      <pubDate>Mon, 30 Mar 2026 12:36:32 +0000</pubDate>
-      <media:thumbnail url="https://cdn.onepiecechapters.com/file/CDN-M-A-N/Screen-Shot-2021-04-23-at-9.31.12-PM-1024x732v3.png" />
-      <media:content url="https://cdn.onepiecechapters.com/file/CDN-M-A-N/Screen-Shot-2021-04-23-at-9.31.12-PM-1024x732v3.png" medium="image" type="image/png" />
-      <enclosure url="https://cdn.onepiecechapters.com/file/CDN-M-A-N/Screen-Shot-2021-04-23-at-9.31.12-PM-1024x732v3.png" type="image/png" />
-      <description><![CDATA[<a href="https://tcbonepiecechapters.com/chapters/7974/one-piece-chapter-1178"><img src="https://cdn.onepiecechapters.com/file/CDN-M-A-N/Screen-Shot-2021-04-23-at-9.31.12-PM-1024x732v3.png" alt="One Piece" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://tcbonepiecechapters.com/mangas/5/one-piece">One Piece</a><br/>One Piece  Chapter 1178 A Fading Nightmare</div>]]></description>
-    </item>
+    
+  
   </channel>
+  
+
 </rss>
