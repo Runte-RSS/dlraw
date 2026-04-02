@@ -44,7 +44,7 @@ SITES = [
     {
         "title": "Young King Ours",
         "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E3%83%A4%E3%83%B3%E3%82%B0%E3%82%AD%E3%83%B3%E3%82%B0%E3%82%A2%E3%83%AF%E3%83%BC%E3%82%BA/",
-        "thumb": "https://upload.wikimedia.org/wikipedia/commons/8/89/Portrait_Placeholder.png",
+        "thumb": "https://puu.sh/KKZB1.jpg",
     },{
         "title": "Youjo Senki",
         "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/",
