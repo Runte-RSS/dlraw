@@ -71,6 +71,15 @@ REQUEST_TIMEOUT = 20.0
 USER_AGENT = "MangaFeedBot/1.0 (+https://example.com/)"
 HEADERS = {"User-Agent": USER_AGENT}
 
+def _head_length_and_type(url):
+    try:
+        r = requests.head(url, allow_redirects=True, timeout=5)
+        ctype = r.headers.get("Content-Type", "")
+        clen = r.headers.get("Content-Length")
+        return (ctype or "", int(clen) if clen and clen.isdigit() else None)
+    except Exception:
+        return ("", None)
+
 # simple fetch helper used by gather_latest_from_site
 def fetch_page(url: str) -> str | None:
     try:
@@ -340,33 +349,58 @@ def write_rss(channel_title, channel_link, channel_desc, items, out_file):
         parts.append(f'      <link>{escape(channel_link)}</link>')
         parts.append('    </image>')
 
-    for it in items:
-        title = escape(it.get("title", ""))
-        link = escape(it.get("link", ""))
-        guid = escape(it.get("guid", ""))
-        pubDate = it.get("pubDate", "")
-        image = it.get("image", "")
-        # description may contain HTML; wrap in CDATA
-        desc = it.get("description", "")
-        # ensure CDATA does not contain "]]>" — if it does, fall back to escaped text
-        if "]]>" in desc:
-            desc_block = escape(desc)
+   # assume channel_image_url is set earlier, e.g. channel_image_url = items[0].get("image") or ""
+for it in items:
+    title = escape(it.get("title", ""))
+    link = escape(it.get("link", ""))
+    guid = escape(it.get("guid", ""))
+    pubDate = it.get("pubDate", "")
+    # description may contain HTML; wrap in CDATA
+    desc = it.get("description", "")
+    if "]]>" in desc:
+        desc_block = escape(desc)
+    else:
+        desc_block = f"<![CDATA[{desc}]]>"
+
+    parts.append('    <item>')
+    parts.append(f'      <title>{title}</title>')
+    parts.append(f'      <link>{link}</link>')
+    parts.append(f'      <guid isPermaLink="false">{guid}</guid>')
+    parts.append(f'      <pubDate>{pubDate}</pubDate>')
+
+    # image selection: prefer per-item thumb, then item image, then channel image
+    image = it.get("thumb") or it.get("image") or channel_image_url or ""
+    if image:
+        # normalize to absolute https
+        if image.startswith("//"):
+            image = "https:" + image
+        if image.startswith("http://"):
+            image = image.replace("http://", "https://", 1)
+
+        # media tags
+        parts.append(f'      <media:thumbnail url="{escape(image)}" />')
+        parts.append(f'      <media:content url="{escape(image)}" medium="image" />')
+
+        # enclosure with MIME type and optional length
+        ctype, clen = _head_length_and_type(image)
+        if not ctype:
+            if image.lower().endswith(".png"):
+                ctype = "image/png"
+            elif image.lower().endswith((".jpg", ".jpeg")):
+                ctype = "image/jpeg"
+            elif image.lower().endswith(".webp"):
+                ctype = "image/webp"
+            else:
+                ctype = "image/*"
+
+        if clen:
+            parts.append(f'      <enclosure url="{escape(image)}" type="{escape(ctype)}" length="{clen}" />')
         else:
-            desc_block = f"<![CDATA[{desc}]]>"
+            parts.append(f'      <enclosure url="{escape(image)}" type="{escape(ctype)}" />')
 
-        parts.append('    <item>')
-        parts.append(f'      <title>{title}</title>')
-        parts.append(f'      <link>{link}</link>')
-        parts.append(f'      <guid isPermaLink="false">{guid}</guid>')
-        parts.append(f'      <pubDate>{pubDate}</pubDate>')
-        if image:
-            parts.append(f'      <media:thumbnail url="{escape(image)}" />')
-            parts.append(f'      <enclosure url="{escape(image)}" type="{escape(mime_for_url(image))}" />')
-        parts.append(f'      <description>{desc_block}</description>')
-        parts.append('    </item>')
+    parts.append(f'      <description>{desc_block}</description>')
+    parts.append('    </item>')
 
-    parts.append('  </channel>')
-    parts.append('</rss>')
 
     raw = "\n".join(parts).encode("utf-8")
 
