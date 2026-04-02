@@ -25,14 +25,13 @@ import re
 import json
 import argparse
 import logging
-from datetime import datetime, timezone
 from email.utils import format_datetime
 from urllib.parse import urljoin
 import xml.etree.ElementTree as ET
 import hashlib   # add at top of file if not already present
 import requests
 from bs4 import BeautifulSoup
-
+from datetime import datetime, timezone
 from xml.sax.saxutils import escape
 from xml.dom import minidom
 import tempfile
@@ -53,7 +52,23 @@ SITES = [
         "title": "Isekai Meikyuu de Harem wo",
         "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/",
         "thumb": "https://static.zerochan.net/Isekai.Meikyuu.de.Harem.wo.1024.3730804.webp",
-    },
+    },{
+        "title": "Aoki Hagane no Arpeggio",
+        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E8%92%BC%E3%81%8D%E9%8B%BC%E3%81%AE%E3%82%A2%E3%83%AB%E3%83%9A%E3%82%B8%E3%82%AA/",
+        "thumb": "https://puu.sh/KKZB1.jpg",
+    },{
+        "title": "Kage no Jitsuryokusha ni Naritakute",
+        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81/",
+        "thumb": "https://puu.sh/KKZDj.png",
+    },{
+        "title": "Kurotsuki no Yerknacht",
+        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%BB%92%E6%9C%88%E3%81%AE%E3%82%A4%E3%82%A7%E3%83%AB%E3%82%AF%E3%83%8A%E3%83%8F%E3%83%88/",
+        "thumb": "https://puu.sh/KKZDv.jpg",
+    },{
+        "title": "Tsuki Michibiku Isekai Douchuu",
+        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E6%9C%88%E3%81%8C%E5%B0%8E%E3%81%8F%E7%95%B0%E4%B8%96%E7%95%8C%E9%81%93%E4%B8%AD/",
+        "thumb": "https://puu.sh/KKZDW.jpg",
+    }
     # Add more sites here as needed:
     # {"title": "Another Series", "url": "https://dlraw.cc/.../", "thumb": "https://..."},
 ]
@@ -498,9 +513,7 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
                           m.get("image"), m.get("thumb"), m.get("guid"))
 
 
-    # --- ensure merged items use per-site thumb and rebuild description ---
-    from datetime import datetime
-
+    # --- ens
     for item in merged:
         link = item.get("link", "")
         # find matching site (match by URL prefix)
