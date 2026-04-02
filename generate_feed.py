@@ -68,6 +68,10 @@ SITES = [
         "title": "Tsuki Michibiku Isekai Douchuu",
         "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E6%9C%88%E3%81%8C%E5%B0%8E%E3%81%8F%E7%95%B0%E4%B8%96%E7%95%8C%E9%81%93%E4%B8%AD/",
         "thumb": "https://puu.sh/KKZDW.jpg",
+    },{
+        "title": "Kage no jitsuryokusha ni naritakute masuta obu gaden shichikage retsuden",
+        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC%E3%82%AA%E3%83%96%E3%82%AC%E3%83%BC%E3%83%87%E3%83%B3%EF%BD%9E%E4%B8%83%E9%99%B0%E5%88%97%E4%BC%9D%EF%BD%9E/",
+        "thumb": "https://puu.sh/KKZH8.jpg",
     }
     # Add more sites here as needed:
     # {"title": "Another Series", "url": "https://dlraw.cc/.../", "thumb": "https://..."},
