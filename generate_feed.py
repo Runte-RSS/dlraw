@@ -86,6 +86,18 @@ REQUEST_TIMEOUT = 20.0
 USER_AGENT = "MangaFeedBot/1.0 (+https://example.com/)"
 HEADERS = {"User-Agent": USER_AGENT}
 
+_GUID_THUMB_RE = re.compile(r"^(.*)\|[0-9a-fA-F]{8}$")
+
+def normalize_guid(guid: str) -> str:
+    """
+    Return the canonical GUID used for seen/dedup checks.
+    If guid ends with |<8-hex>, strip that suffix; otherwise return guid unchanged.
+    """
+    if not guid:
+        return guid
+    m = _GUID_THUMB_RE.match(guid)
+    return m.group(1) if m else guid
+
 def _head_length_and_type(url):
     try:
         r = requests.head(url, allow_redirects=True, timeout=5)
@@ -465,14 +477,13 @@ def build_rss(items: list[dict], out_file: str):
 
 
 def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items: int = MAX_ITEMS, debug: bool = False):
-    # load seen and build a set of GUIDs that were seen before this run
+    #load seen and build a normalized set of GUIDs that were seen before this run
     seen = load_seen(seen_file)
     prev_seen_guids = set()
     for it in seen.get("items", []):
-        if isinstance(it, str):
-            prev_seen_guids.add(it)
-        elif isinstance(it, dict):
-            prev_seen_guids.add(it.get("guid"))
+        raw = it if isinstance(it, str) else it.get("guid")
+        if raw:
+            prev_seen_guids.add(normalize_guid(raw))
 
     new_items = []
     newly_added_guids = []
@@ -489,13 +500,18 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
         # include latest in merged feed
         new_items.append(latest)
 
-        # if unseen before, record it and mark as newly added
-        if latest["guid"] not in prev_seen_guids:
-            # record as seen with timestamp
-            seen.setdefault("items", []).append({"guid": latest["guid"], "seen_at": datetime.now(timezone.utc).isoformat()})
+        # normalized membership check to avoid duplicates when GUID suffix changed
+        base_guid = normalize_guid(latest["guid"])
+        if base_guid not in prev_seen_guids:
+            # record as seen with timestamp (store full GUID so feed preserves exact GUID)
+            seen.setdefault("items", []).append({
+                "guid": latest["guid"],
+                "seen_at": datetime.now(timezone.utc).isoformat()
+            })
             newly_added_guids.append(latest["guid"])
+            prev_seen_guids.add(base_guid)
 
-        # merged = newest-per-site only (no history)
+    # merged = newest-per-site only (no history)
     merged = []
     seen_merge = set()
     for it in new_items:
@@ -504,7 +520,7 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
             seen_merge.add(it["guid"])
     merged = merged[:max_items]
 
-    import pprint
+    # debug preview (only when logger is DEBUG)
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug("Merged items preview (title, link, image, thumb, guid):")
         for m in merged[:8]:
@@ -512,24 +528,32 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
                           m.get("title"), m.get("link"),
                           m.get("image"), m.get("thumb"), m.get("guid"))
 
+    # ensure merged items use per-site thumb and rebuild description
+    from urllib.parse import urlparse, unquote
+    def _site_matches(link: str, s_url: str) -> bool:
+        if not link or not s_url:
+            return False
+        pl = urlparse(link)
+        ps = urlparse(s_url)
+        if (pl.netloc or "").lower() != (ps.netloc or "").lower():
+            return False
+        return unquote(pl.path).startswith(unquote(ps.path))
 
-    # --- ens
     for item in merged:
-        link = item.get("link", "")
-        # find matching site (match by URL prefix)
+        link = item.get("link", "") or ""
         matched_site = None
         for s in sites:
-            s_url = s.get("url", "")
-            if s_url and link.startswith(s_url):
+            if _site_matches(link, s.get("url", "")):
                 matched_site = s
                 break
+
         # Force the per-site thumb when available; otherwise keep existing item thumb/image
         if matched_site and matched_site.get("thumb"):
             item["thumb"] = matched_site.get("thumb")
         else:
             item["thumb"] = item.get("thumb") or item.get("image") or ""
 
-
+        # ensure write_rss sees the same URL in image and thumb
         if item.get("thumb"):
             item["image"] = item["thumb"]
 
@@ -544,24 +568,12 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
             f'<div><a href="{link}">{escape(site_title or link)}</a><br/>{escape(title)}</div>'
         )
 
-
-        # rebuild description HTML so the <img src="..."> uses the thumb
-        title = item.get("title", "")
-        site_title = matched_site.get("title") if matched_site else (item.get("site_title") or "")
-        thumb = item.get("thumb") or item.get("image") or ""
-        desc_html = (
-            f'<a href="{link}">'
-            f'<img src="{thumb}" alt="{escape(title)}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
-            f'</a>'
-            f'<div><a href="{link}">{escape(site_title or link)}</a><br/>{escape(title)}</div>'
-        )
-        item["description"] = desc_html
-
     # write rss and seen (preserve the seen structure we built)
     build_rss(merged, rss_file)
     save_seen(seen_file, seen)
 
     return {"added": newly_added_guids, "total": len(merged)}
+
 
 
 
