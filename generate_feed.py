@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import re
 import json
+from pathlib import Path
 import argparse
 import logging
 from email.utils import format_datetime
@@ -92,6 +93,35 @@ HEADERS = {"User-Agent": USER_AGENT}
 
 _GUID_THUMB_RE = re.compile(r"^(.*)\|[0-9a-fA-F]{8}$")
 
+def seen_at_to_rfc2822(seen_at_iso: str) -> str:
+    """
+    Convert ISO timestamp (seen_at) to RFC-2822 string used for pubDate.
+    If conversion fails, return now_rfc2822() as fallback.
+    """
+    try:
+        # parse ISO with timezone if present
+        dt = datetime.fromisoformat(seen_at_iso)
+        # ensure timezone-aware
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return format_datetime(dt)
+    except Exception:
+        return now_rfc2822()
+
+p = Path("seen.json")
+if p.exists():
+    data = json.loads(p.read_text(encoding="utf-8"))
+    items = data.get("items", [])
+    changed = False
+    for it in items:
+        if isinstance(it, dict) and not it.get("pubDate"):
+            seen_at = it.get("seen_at", "")
+            if seen_at:
+                it["pubDate"] = seen_at_to_rfc2822(seen_at)
+                changed = True
+    if changed:
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        
 def normalize_guid(guid: str) -> str:
     """
     Return the canonical GUID used for seen/dedup checks.
@@ -274,8 +304,6 @@ def parse_dlraw_index(html: str, base_url: str):
 
     return candidates
 
-
-import hashlib  # ensure this is at top of file (only once)
 
 def gather_latest_from_site(site: dict) -> dict | None:
     url = site["url"]
@@ -481,17 +509,28 @@ def build_rss(items: list[dict], out_file: str):
 
 
 def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items: int = MAX_ITEMS, debug: bool = False):
-    #load seen and build a normalized set of GUIDs that were seen before this run
+    # load seen and build a normalized set/map of GUIDs that were seen before this run
     seen = load_seen(seen_file)
+    seen_items = seen.setdefault("items", [])
     prev_seen_guids = set()
-    for it in seen.get("items", []):
+    seen_map = {}
+    for it in seen_items:
         raw = it if isinstance(it, str) else it.get("guid")
-        if raw:
-            prev_seen_guids.add(normalize_guid(raw))
+        if not raw:
+            continue
+        base = normalize_guid(raw)
+        prev_seen_guids.add(base)
+        # prefer the most recent dict entry for this base GUID
+        if isinstance(it, dict):
+            seen_map[base] = it
+        else:
+            # convert old string entries into dict form for uniformity
+            seen_map.setdefault(base, {"guid": raw, "seen_at": "", "pubDate": ""})
 
     new_items = []
     newly_added_guids = []
 
+    # gather latest from each site
     for site in sites:
         if debug:
             logging.info("Checking site: %s", site["url"])
@@ -507,11 +546,15 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
         # normalized membership check to avoid duplicates when GUID suffix changed
         base_guid = normalize_guid(latest["guid"])
         if base_guid not in prev_seen_guids:
-            # record as seen with timestamp (store full GUID so feed preserves exact GUID)
-            seen.setdefault("items", []).append({
+            # record as seen with timestamp and stable pubDate
+            pubdate = now_rfc2822()
+            entry = {
                 "guid": latest["guid"],
-                "seen_at": datetime.now(timezone.utc).isoformat()
-            })
+                "seen_at": datetime.now(timezone.utc).isoformat(),
+                "pubDate": pubdate
+            }
+            seen_items.append(entry)
+            seen_map[base_guid] = entry
             newly_added_guids.append(latest["guid"])
             prev_seen_guids.add(base_guid)
 
@@ -572,11 +615,36 @@ def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items
             f'<div><a href="{link}">{escape(site_title or link)}</a><br/>{escape(title)}</div>'
         )
 
+    # ensure each merged item has a stable pubDate (prefer seen.pubDate, fallback to seen_at -> RFC2822)
+    for item in merged:
+        base = normalize_guid(item.get("guid", ""))
+        seen_entry = seen_map.get(base)
+        if seen_entry and isinstance(seen_entry, dict):
+            pd = seen_entry.get("pubDate")
+            if pd:
+                item["pubDate"] = pd
+            else:
+                seen_at = seen_entry.get("seen_at", "")
+                item["pubDate"] = seen_at_to_rfc2822(seen_at) if seen_at else now_rfc2822()
+                seen_entry["pubDate"] = item["pubDate"]
+        else:
+            if not item.get("pubDate"):
+                item["pubDate"] = now_rfc2822()
+            if base not in seen_map:
+                entry = {
+                    "guid": item["guid"],
+                    "seen_at": datetime.now(timezone.utc).isoformat(),
+                    "pubDate": item["pubDate"]
+                }
+                seen_items.append(entry)
+                seen_map[base] = entry
+
     # write rss and seen (preserve the seen structure we built)
     build_rss(merged, rss_file)
     save_seen(seen_file, seen)
 
     return {"added": newly_added_guids, "total": len(merged)}
+
 
 
 
