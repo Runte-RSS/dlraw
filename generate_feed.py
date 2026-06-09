@@ -73,6 +73,10 @@ SITES = [
         "title": "Kage no jitsuryokusha ni naritakute masuta obu gaden shichikage retsuden",
         "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC%E3%82%AA%E3%83%96%E3%82%AC%E3%83%BC%E3%83%87%E3%83%B3%EF%BD%9E%E4%B8%83%E9%99%B0%E5%88%97%E4%BC%9D%EF%BD%9E/",
         "thumb": "https://puu.sh/KKZH8.jpg",
+    },{
+        "title": "Tenseishitara slime datta ken",
+        "url": "https://dlraw.app/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E8%BB%A2%E7%94%9F%E3%81%97%E3%81%9F%E3%82%89%E3%82%B9%E3%83%A9%E3%82%A4%E3%83%A0%E3%81%A0%E3%81%A3%E3%81%9F%E4%BB%B6/",
+        "thumb": "https://puu.sh/KOdNv.png",
     }
     # Add more sites here as needed:
     # {"title": "Another Series", "url": "https://dlraw.cc/.../", "thumb": "https://..."},
