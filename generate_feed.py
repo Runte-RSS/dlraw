@@ -41,41 +41,37 @@ import tempfile
 # Configuration: add sites here
 # -----------------------
 SITES = [
-    {
-        "title": "Young King Ours",
-        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E3%83%A4%E3%83%B3%E3%82%B0%E3%82%AD%E3%83%B3%E3%82%B0%E3%82%A2%E3%83%AF%E3%83%BC%E3%82%BA/",
-        "thumb": "https://puu.sh/KL75X.png",
-    },{
+   {
         "title": "Youjo Senki",
-        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/",
+        "url": "https://dl-raw.si/%e5%b9%bc%e5%a5%b3%e6%88%a6%e8%a8%98-raw/",
         "thumb": "https://puu.sh/KKZc7.png",
     },{
         "title": "Isekai Meikyuu de Harem wo",
-        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/",
+        "url": "https://dl-raw.si/%e7%95%b0%e4%b8%96%e7%95%8c%e8%bf%b7%e5%ae%ae%e3%81%a7%e3%83%8f%e3%83%bc%e3%83%ac%e3%83%a0%e3%82%92-raw/",
         "thumb": "https://static.zerochan.net/Isekai.Meikyuu.de.Harem.wo.1024.3730804.webp",
     },{
         "title": "Aoki Hagane no Arpeggio",
-        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E8%92%BC%E3%81%8D%E9%8B%BC%E3%81%AE%E3%82%A2%E3%83%AB%E3%83%9A%E3%82%B8%E3%82%AA/",
+        "url": "https://dl-raw.si/%e8%92%bc%e3%81%8d%e9%8b%bc%e3%81%ae%e3%82%a2%e3%83%ab%e3%83%9a%e3%82%b8%e3%82%aa-raw/",
         "thumb": "https://puu.sh/KKZB1.jpg",
     },{
         "title": "Kage no Jitsuryokusha ni Naritakute",
-        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81/",
+        "url": "https://dl-raw.si/%e9%99%b0%e3%81%ae%e5%ae%9f%e5%8a%9b%e8%80%85%e3%81%ab%e3%81%aa%e3%82%8a%e3%81%9f%e3%81%8f%e3%81%a6%ef%bc%81-raw/",
         "thumb": "https://puu.sh/KKZDj.png",
     },{
         "title": "Kurotsuki no Yerknacht",
-        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%BB%92%E6%9C%88%E3%81%AE%E3%82%A4%E3%82%A7%E3%83%AB%E3%82%AF%E3%83%8A%E3%83%8F%E3%83%88/",
+        "url": "https://dl-raw.si/%e9%bb%92%e6%9c%88%e3%81%ae%e3%82%a4%e3%82%a7%e3%83%ab%e3%82%af%e3%83%8a%e3%83%8f%e3%83%88-raw/",
         "thumb": "https://puu.sh/KKZDv.jpg",
     },{
         "title": "Tsuki Michibiku Isekai Douchuu",
-        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E6%9C%88%E3%81%8C%E5%B0%8E%E3%81%8F%E7%95%B0%E4%B8%96%E7%95%8C%E9%81%93%E4%B8%AD/",
+        "url": "dl-raw.si/月が導く異世界道中-raw/",
         "thumb": "https://puu.sh/KKZDW.jpg",
     },{
         "title": "Kage no jitsuryokusha ni naritakute masuta obu gaden shichikage retsuden",
-        "url": "https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC%E3%82%AA%E3%83%96%E3%82%AC%E3%83%BC%E3%83%87%E3%83%B3%EF%BD%9E%E4%B8%83%E9%99%B0%E5%88%97%E4%BC%9D%EF%BD%9E/",
+        "url": "https://dl-raw.si/%e9%99%b0%e3%81%ae%e5%ae%9f%e5%8a%9b%e8%80%85%e3%81%ab%e3%81%aa%e3%82%8a%e3%81%9f%e3%81%8f%e3%81%a6%ef%bc%81%e3%83%9e%e3%82%b9%e3%82%bf%e3%83%bc%e3%82%aa%e3%83%96%e3%82%ac%e3%83%bc%e3%83%87%e3%83%b3/",
         "thumb": "https://puu.sh/KKZH8.jpg",
     },{
         "title": "Tenseishitara slime datta ken",
-        "url": "https://dlraw.app/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E8%BB%A2%E7%94%9F%E3%81%97%E3%81%9F%E3%82%89%E3%82%B9%E3%83%A9%E3%82%A4%E3%83%A0%E3%81%A0%E3%81%A3%E3%81%9F%E4%BB%B6/",
+        "url": "https://dl-raw.si/%e8%bb%a2%e7%94%9f%e3%81%97%e3%81%9f%e3%82%89%e3%82%b9%e3%83%a9%e3%82%a4%e3%83%a0%e3%81%a0%e3%81%a3%e3%81%9f%e4%bb%b6-raw/",
         "thumb": "https://puu.sh/KOdNv.png",
     }
     # Add more sites here as needed:
