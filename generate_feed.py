@@ -63,7 +63,7 @@ SITES = [
         "thumb": "https://puu.sh/KKZDv.jpg",
     },{
         "title": "Tsuki Michibiku Isekai Douchuu",
-        "url": "dl-raw.si/月が導く異世界道中-raw/",
+        "url": "https://dl-raw.si/%e6%9c%88%e3%81%8c%e5%b0%8e%e3%81%8f%e7%95%b0%e4%b8%96%e7%95%8c%e9%81%93%e4%b8%ad-raw/",
         "thumb": "https://puu.sh/KKZDW.jpg",
     },{
         "title": "Kage no jitsuryokusha ni naritakute masuta obu gaden shichikage retsuden",
