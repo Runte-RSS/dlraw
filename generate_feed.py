@@ -44,7 +44,7 @@ SITES = [
    {
         "title": "Youjo Senki",
         "url": "https://dl-raw.si/%e5%b9%bc%e5%a5%b3%e6%88%a6%e8%a8%98-raw/",
-        "thumb": "https://puu.sh/KKZc7.png",
+        "thumb": "https://puu.sh/KR4oa.png",
     },{
         "title": "Isekai Meikyuu de Harem wo",
         "url": "https://dl-raw.si/%e7%95%b0%e4%b8%96%e7%95%8c%e8%bf%b7%e5%ae%ae%e3%81%a7%e3%83%8f%e3%83%bc%e3%83%ac%e3%83%a0%e3%82%92-raw/",
@@ -52,7 +52,7 @@ SITES = [
     },{
         "title": "Aoki Hagane no Arpeggio",
         "url": "https://dl-raw.si/%e8%92%bc%e3%81%8d%e9%8b%bc%e3%81%ae%e3%82%a2%e3%83%ab%e3%83%9a%e3%82%b8%e3%82%aa-raw/",
-        "thumb": "https://puu.sh/KKZB1.jpg",
+        "thumb": "https://puu.sh/KR4o5.png",
     },{
         "title": "Kage no Jitsuryokusha ni Naritakute",
         "url": "https://dl-raw.si/%e9%99%b0%e3%81%ae%e5%ae%9f%e5%8a%9b%e8%80%85%e3%81%ab%e3%81%aa%e3%82%8a%e3%81%9f%e3%81%8f%e3%81%a6%ef%bc%81-raw/",
@@ -68,7 +68,7 @@ SITES = [
     },{
         "title": "Kage no jitsuryokusha ni naritakute masuta obu gaden shichikage retsuden",
         "url": "https://dl-raw.si/%e9%99%b0%e3%81%ae%e5%ae%9f%e5%8a%9b%e8%80%85%e3%81%ab%e3%81%aa%e3%82%8a%e3%81%9f%e3%81%8f%e3%81%a6%ef%bc%81%e3%83%9e%e3%82%b9%e3%82%bf%e3%83%bc%e3%82%aa%e3%83%96%e3%82%ac%e3%83%bc%e3%83%87%e3%83%b3/",
-        "thumb": "https://puu.sh/KKZH8.jpg",
+        "thumb": "https://puu.sh/KR4nM.jpg",
     },{
         "title": "Tenseishitara slime datta ken",
         "url": "https://dl-raw.si/%e8%bb%a2%e7%94%9f%e3%81%97%e3%81%9f%e3%82%89%e3%82%b9%e3%83%a9%e3%82%a4%e3%83%a0%e3%81%a0%e3%81%a3%e3%81%9f%e4%bb%b6-raw/",
