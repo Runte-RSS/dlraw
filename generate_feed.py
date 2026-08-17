@@ -1,45 +1,50 @@
-#!/usr/bin/env python3
 """
 generate_feed.py
 
-Auto-generate an RSS feed (rss.xml) from one or more dlraw-style index pages.
-- Writes rss.xml and seen.json in the current directory.
-- Runs a single iteration and exits (scheduling should be handled by your workflow/cron).
-- Easy to add more sites: edit the SITES list below.
-- Keeps only newest releases (per-site canonicalization).
-- Each item includes a link back to the dlraw index page (not to mirror hosts),
-  a description with an <img> thumbnail, and media/enclosure tags.
+Watch one or more web pages and generate an RSS feed when they change.
 
-Usage:
-    python generate_feed.py            # run once and exit
-    python generate_feed.py --debug    # verbose logging
-    python generate_feed.py --max 40   # keep up to 40 items in feed
+Design goals:
+- Detect actual page/article changes rather than guessing from arbitrary links.
+- Prefer the site's modified date when available.
+- Fall back to a content hash when no reliable modified date exists.
+- Ignore old dates embedded in download filenames/categories.
+- Keep a history of detected updates.
+- Generate valid RSS 2.0.
+- Atomic writes for rss.xml and state.json.
+- Works well from GitHub Actions / cron.
 
 Dependencies:
     pip install requests beautifulsoup4
+
+Usage:
+    python generate_feed.py
+    python generate_feed.py --debug
+    python generate_feed.py --max 50
 """
 
 from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import logging
 import os
 import re
-import json
-from pathlib import Path
-import argparse
-import logging
+import tempfile
+from datetime import datetime, timezone
 from email.utils import format_datetime
-from urllib.parse import urljoin
-import xml.etree.ElementTree as ET
-import hashlib   # add at top of file if not already present
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timezone
 from xml.sax.saxutils import escape
-from xml.dom import minidom
-import tempfile
 
-# -----------------------
-# Configuration: add sites here
-# -----------------------
+
+# ============================================================
+# Configuration
+# ============================================================
+
 SITES = [
    {
         "title": "Youjo Senki",
@@ -78,594 +83,1091 @@ SITES = [
     # {"title": "Another Series", "url": "https://dlraw.cc/.../", "thumb": "https://..."},
 ]
 
-# Feed metadata
+
+
+RSS_FILE = "rss.xml"
+STATE_FILE = "state.json"
+
 FEED_TITLE = "DL-Raw Watchlist"
 FEED_LINK = "https://example.com/"
-FEED_DESC = "Auto-generated manga feed (dlraw watcher)"
-RSS_FILE = "rss.xml"
-SEEN_FILE = "seen.json"
-MAX_ITEMS = 50  # keep this many items in the feed
+FEED_DESCRIPTION = "Automatic update feed"
 
-# HTTP settings (place near top of file)
-REQUEST_TIMEOUT = 20.0
-USER_AGENT = "MangaFeedBot/1.0 (+https://example.com/)"
-HEADERS = {"User-Agent": USER_AGENT}
+MAX_ITEMS = 50
 
-_GUID_THUMB_RE = re.compile(r"^(.*)\|[0-9a-fA-F]{8}$")
+REQUEST_TIMEOUT = 20
 
-def seen_at_to_rfc2822(seen_at_iso: str) -> str:
-    """
-    Convert ISO timestamp (seen_at) to RFC-2822 string used for pubDate.
-    If conversion fails, return now_rfc2822() as fallback.
-    """
-    try:
-        # parse ISO with timezone if present
-        dt = datetime.fromisoformat(seen_at_iso)
-        # ensure timezone-aware
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return format_datetime(dt)
-    except Exception:
-        return now_rfc2822()
+USER_AGENT = (
+    "MangaFeedBot/2.0 "
+    "(web page change watcher; contact: example@example.com)"
+)
 
-p = Path("seen.json")
-if p.exists():
-    data = json.loads(p.read_text(encoding="utf-8"))
-    items = data.get("items", [])
-    changed = False
-    for it in items:
-        if isinstance(it, dict) and not it.get("pubDate"):
-            seen_at = it.get("seen_at", "")
-            if seen_at:
-                it["pubDate"] = seen_at_to_rfc2822(seen_at)
-                changed = True
-    if changed:
-        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        
-def normalize_guid(guid: str) -> str:
-    """
-    Return the canonical GUID used for seen/dedup checks.
-    If guid ends with |<8-hex>, strip that suffix; otherwise return guid unchanged.
-    """
-    if not guid:
-        return guid
-    m = _GUID_THUMB_RE.match(guid)
-    return m.group(1) if m else guid
-
-def _head_length_and_type(url):
-    try:
-        r = requests.head(url, allow_redirects=True, timeout=5)
-        ctype = r.headers.get("Content-Type", "")
-        clen = r.headers.get("Content-Length")
-        return (ctype or "", int(clen) if clen and clen.isdigit() else None)
-    except Exception:
-        return ("", None)
-
-# simple fetch helper used by gather_latest_from_site
-def fetch_page(url: str) -> str | None:
-    try:
-        import requests
-        r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        return r.text
-    except Exception as e:
-        logging.debug("fetch_page error for %s: %s", url, e)
-        return None
-
-
-# MIME helper
-MIME_BY_EXT = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".svg": "image/svg+xml",
-    ".bmp": "image/bmp",
+HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml",
 }
 
-def mime_for_url(url: str) -> str:
-    if not url:
-        return "image/jpeg"
-    u = url.split("?", 1)[0].split("#", 1)[0].lower()
-    for ext, m in MIME_BY_EXT.items():
-        if u.endswith(ext):
-            return m
-    return "image/jpeg"
-# --- simple heuristics to detect release-like text ---
-RAR_RE = re.compile(r"\.rar\b", flags=re.I)
 
-def is_rar_like(text: str) -> bool:
-    """
-    Return True for strings that look like release filenames or version tokens,
-    e.g. 'Young_King_Ours_2026-04.rar', 'Senki_v34.rar', 'v34', '2026-04.rar'.
-    """
-    if not text:
-        return False
-    t = text.strip()
-    # obvious .rar filename
-    if RAR_RE.search(t):
-        return True
-    # date-like YYYY-MM or YYYY_MM
-    if re.search(r"\b20\d{2}[-_.]?(0[1-9]|1[0-2])\b", t):
-        return True
-    # vNN pattern
-    if re.search(r"\bv\s?0*[0-9]+\b", t, flags=re.I):
-        return True
-    # trailing numeric tokens like _34 or -34 or v34
-    if re.search(r"[_\-\s]v?0*[0-9]{1,6}\b", t, flags=re.I):
-        return True
-    return False
+# ============================================================
+# HTTP
+# ============================================================
 
-# -----------------------
-# Parsing/version heuristics
-# -----------------------
-DATE_RE = re.compile(r"(20\d{2})[._-]?(0[1-9]|1[0-2])")
-VNUM_RE = re.compile(r"\bv\s?0*([0-9]+)\b", flags=re.I)
-TRAIL_NUM_RE = re.compile(r"[_\-\s]v?0*([0-9]+)(?:\.[a-zA-Z0-9]+)?$", flags=re.I)
-RAR_RE = re.compile(r"\.rar\b", flags=re.I)
+def fetch_page(url: str) -> tuple[str, requests.Response] | None:
+    """Fetch a page and return (html, response)."""
 
-# --- normalize candidate text (strip mirror noise) ---
-def normalize_candidate_text(s: str) -> str:
-    if not s:
-        return ""
-    t = s.strip()
-    # remove common mirror host suffixes like "(uploaded by ...)" or "[host]" or trailing " - host"
-    t = re.sub(r"\(.*?\)$", "", t)
-    t = re.sub(r"\[.*?\]$", "", t)
-    t = re.sub(r"-\s*uploaded.*$", "", t, flags=re.I)
-    t = re.sub(r"\s+[-–—]\s+.*$", "", t)  # remove trailing " - something"
-    t = t.strip(" \t\n\r\"'_-")
-    return t
-
-
-# --- improved version key extraction (numeric, prefer largest vN) ---
-def extract_version_key(title: str):
-    """
-    Return a tuple for comparison. Higher tuple sorts later (newer).
-    Priority:
-      3 -> date-like YYYY-MM (year, month)
-      2 -> vNN (use max v found)
-      1 -> any numeric tokens (use max number)
-      0 -> fallback (string)
-    """
-    t = normalize_candidate_text(title or "")
-    # date-like YYYY-MM
-    m = DATE_RE.search(t)
-    if m:
-        year = int(m.group(1)); month = int(m.group(2))
-        return (3, year, month, t)
-
-    # collect all vN occurrences and pick the largest
-    # allow separators like start, space, underscore, or hyphen before 'v'
-    vnums = [int(x) for x in re.findall(r"(?:^|[_\-\s])v\s?0*([0-9]+)\b", t, flags=re.I)]
-    if vnums:
-        return (2, max(vnums), t)
-
-    # collect any numeric tokens and pick the largest
-    # look for numbers preceded by separator or start to avoid matching years inside words
-    nums = [int(x) for x in re.findall(r"(?:^|[_\-\s])0*([0-9]{1,6})\b", t)]
-    if nums:
-        return (1, max(nums), t)
-
-    # fallback: use the raw normalized title (lowest priority)
-    return (0, 0, t)
-
-# --- improved dlraw index parsing: inspect anchor text and href filename ---
-def parse_dlraw_index(html: str, base_url: str):
-    soup = BeautifulSoup(html, "html.parser")
-    candidates = []
-
-    # 1) anchors: inspect both anchor text and href last path segment
-    for a in soup.find_all("a"):
-        text = (a.get_text() or "").strip()
-        href = a.get("href") or ""
-        # normalize and test anchor text
-        nt = normalize_candidate_text(text)
-        if nt and is_rar_like(nt):
-            candidates.append({"title": nt, "link": base_url, "thumb": None})
-            continue
-        # inspect href last segment (filename)
-        if href:
-            last = href.split("/")[-1].strip()
-            last = normalize_candidate_text(last)
-            if last and is_rar_like(last):
-                candidates.append({"title": last, "link": base_url, "thumb": None})
-                continue
-
-    # 2) fallback: text nodes (if no anchor candidates found)
-    if not candidates:
-        for tag in soup.find_all(string=True):
-            txt = tag.strip()
-            if not txt:
-                continue
-            nt = normalize_candidate_text(txt)
-            if nt and is_rar_like(nt):
-                candidates.append({"title": nt, "link": base_url, "thumb": None})
-
-    # 3) fallback: page title
-    if not candidates:
-        page_title = soup.title.string.strip() if soup.title and soup.title.string else None
-        if page_title:
-            candidates.append({"title": normalize_candidate_text(page_title), "link": base_url, "thumb": None})
-
-    # 4) find a thumbnail (first reasonable <img>)
-    thumb = None
-    for img in soup.find_all("img"):
-        src = img.get("src") or img.get("data-src") or ""
-        if not src:
-            continue
-        thumb = urljoin(base_url, src)
-        break
-
-    if thumb:
-        for c in candidates:
-            c["thumb"] = thumb
-
-    return candidates
-
-
-def gather_latest_from_site(site: dict) -> dict | None:
-    url = site["url"]
-    html = fetch_page(url)
-
-    # canonical site URL and optional per-site thumbnail
-    site_url = site.get("url", "")
-    site_thumb = site.get("thumb", "")   # per-site default thumb (if any)
-
-    if not html:
-        logging.debug("Failed to fetch %s", url)
-        return None
-
-    # parse candidates from the index page (your existing parser)
-    candidates = parse_dlraw_index(html, url)
-    if not candidates:
-        logging.debug("No candidates found on %s", url)
-        return None
-
-    # debug: show all candidates and their keys
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        logging.debug("Candidates for %s:", url)
-        for c in candidates:
-            logging.debug("  %r -> key=%r", c["title"], extract_version_key(c["title"]))
-
-    # pick the newest candidate by our version key
-    best = None
-    best_key = None
-    for c in candidates:
-        key = extract_version_key(c["title"])
-        if best is None or key > best_key:
-            best = c
-            best_key = key
-
-    # debug: chosen best
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        logging.debug("Chosen best for %s: %r key=%r", url, best["title"] if best else None, best_key)
-
-    if best is None:
-        return None
-
-    # build the item dict now that we have the chosen candidate
-    title = best["title"]
-    pubDate = now_rfc2822()
-    # prefer item-specific thumb, then site default
-    thumb = best.get("thumb") or site.get("thumb") or ""
-    desc_html = (
-        f'<a href="{url}">'
-        f'<img src="{thumb}" alt="{escape(title)}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
-        f'</a>'
-        f'<div><a href="{url}">{escape(site.get("title") or url)}</a><br/>{escape(title)}</div>'
-    )
-
-    # compute GUID and include a short hash of the thumb so readers notice thumbnail changes
-    thumb_hash = hashlib.sha1((thumb or "").encode()).hexdigest()[:8]
-    guid = make_guid(site_url, title) + "|" + thumb_hash
-
-    latest = {
-        "title": title,
-        "link": url,
-        "guid": guid,
-        "pubDate": pubDate,
-        "description": desc_html,
-        "image": thumb,
-        # also expose thumb explicitly for write_rss to prefer
-        "thumb": thumb,
-    }
-
-    return latest
-
-
-
-
-# -----------------------
-# Feed and seen handling
-# -----------------------
-def load_seen(path: str) -> dict:
-    if not os.path.exists(path):
-        return {"items": []}
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"items": []}
-
-def save_seen(path: str, seen: dict):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(seen, f, indent=2, ensure_ascii=False)
-
-def make_guid(site_url: str, title: str) -> str:
-    return f"{site_url}|{title}"
-
-def now_rfc2822():
-    return format_datetime(datetime.now(timezone.utc))
-
-def write_rss(channel_title, channel_link, channel_desc, items, out_file):
-    """
-    Write a simple RSS 2.0 feed to out_file.
-    - channel_title, channel_link, channel_desc: strings
-    - items: list of dicts with keys: title, link, guid, pubDate, description, image
-    """
-    items = items[:MAX_ITEMS]
-
-    # build raw XML string (use CDATA for description so HTML is preserved)
-    parts = []
-    parts.append('<?xml version="1.0" encoding="utf-8"?>')
-    parts.append('<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">')
-    parts.append('  <channel>')
-    parts.append(f'    <title>{escape(channel_title)}</title>')
-    parts.append(f'    <link>{escape(channel_link)}</link>')
-    parts.append(f'    <description>{escape(channel_desc)}</description>')
-    parts.append(f'    <lastBuildDate>{now_rfc2822()}</lastBuildDate>')
-
-    # optional channel image from first item
-    channel_image_url = ""
-    if items and items[0].get("image"):
-        channel_image_url = items[0]["image"]
-        parts.append('    <image>')
-        parts.append(f'      <url>{escape(channel_image_url)}</url>')
-        parts.append(f'      <title>{escape(channel_title)}</title>')
-        parts.append(f'      <link>{escape(channel_link)}</link>')
-        parts.append('    </image>')
-
-    # ---------- per-item entries (must be indented inside the function) ----------
-    for it in items:
-        title = escape(it.get("title", ""))
-        link = escape(it.get("link", ""))
-        guid = escape(it.get("guid", ""))
-        pubDate = it.get("pubDate", "")
-        # description may contain HTML; wrap in CDATA
-        desc = it.get("description", "")
-        if "]]>" in desc:
-            desc_block = escape(desc)
-        else:
-            desc_block = f"<![CDATA[{desc}]]>"
-
-        parts.append('    <item>')
-        parts.append(f'      <title>{title}</title>')
-        parts.append(f'      <link>{link}</link>')
-        parts.append(f'      <guid isPermaLink="false">{guid}</guid>')
-        parts.append(f'      <pubDate>{pubDate}</pubDate>')
-
-        # image selection: prefer per-item thumb, then item image, then channel image
-        image = it.get("thumb") or it.get("image") or channel_image_url or ""
-        if image:
-            # normalize to absolute https
-            if image.startswith("//"):
-                image = "https:" + image
-            if image.startswith("http://"):
-                image = image.replace("http://", "https://", 1)
-
-            # media tags
-            parts.append(f'      <media:thumbnail url="{escape(image)}" />')
-            parts.append(f'      <media:content url="{escape(image)}" medium="image" />')
-
-            # enclosure with MIME type (simple fallback)
-            ctype = it.get("_mime") or ""
-            if not ctype:
-                if image.lower().endswith(".png"):
-                    ctype = "image/png"
-                elif image.lower().endswith((".jpg", ".jpeg")):
-                    ctype = "image/jpeg"
-                elif image.lower().endswith(".webp"):
-                    ctype = "image/webp"
-                else:
-                    ctype = "image/*"
-            parts.append(f'      <enclosure url="{escape(image)}" type="{escape(ctype)}" />')
-
-        parts.append(f'      <description>{desc_block}</description>')
-        parts.append('    </item>')
-
-    parts.append('  </channel>')
-    parts.append('</rss>')
-
-    raw = "\n".join(parts).encode("utf-8")
-    with open(out_file, "wb") as f:
-        f.write(raw)
-
-
-    # pretty-print using minidom (works reliably across Python versions)
-    try:
-        dom = minidom.parseString(raw)
-        pretty = dom.toprettyxml(indent="  ", encoding="utf-8")
-    except Exception:
-        # fallback: write raw if minidom fails
-        pretty = raw
-
-    # atomic write to out_file
-    dirpath = os.path.dirname(out_file) or "."
-    with tempfile.NamedTemporaryFile("wb", dir=dirpath, delete=False) as tf:
-        tf.write(pretty)
-        tempname = tf.name
-    os.replace(tempname, out_file)
-
-def build_rss(items: list[dict], out_file: str):
-    """
-    Backwards-compatible wrapper so existing code that calls build_rss
-    continues to work while using the new write_rss implementation.
-    """
-    # write_rss expects channel title/link/description first
-    return write_rss(FEED_TITLE, FEED_LINK, FEED_DESC, items, out_file)
-
-
-
-def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items: int = MAX_ITEMS, debug: bool = False):
-    # load seen and build a normalized set/map of GUIDs that were seen before this run
-    seen = load_seen(seen_file)
-    seen_items = seen.setdefault("items", [])
-    prev_seen_guids = set()
-    seen_map = {}
-    for it in seen_items:
-        raw = it if isinstance(it, str) else it.get("guid")
-        if not raw:
-            continue
-        base = normalize_guid(raw)
-        prev_seen_guids.add(base)
-        # prefer the most recent dict entry for this base GUID
-        if isinstance(it, dict):
-            seen_map[base] = it
-        else:
-            # convert old string entries into dict form for uniformity
-            seen_map.setdefault(base, {"guid": raw, "seen_at": "", "pubDate": ""})
-
-    new_items = []
-    newly_added_guids = []
-
-    # gather latest from each site
-    for site in sites:
-        if debug:
-            logging.info("Checking site: %s", site["url"])
-        latest = gather_latest_from_site(site)
-        if not latest:
-            if debug:
-                logging.info("No latest found for %s", site["url"])
-            continue
-
-        # include latest in merged feed
-        new_items.append(latest)
-
-        # normalized membership check to avoid duplicates when GUID suffix changed
-        base_guid = normalize_guid(latest["guid"])
-        if base_guid not in prev_seen_guids:
-            # record as seen with timestamp and stable pubDate
-            pubdate = now_rfc2822()
-            entry = {
-                "guid": latest["guid"],
-                "seen_at": datetime.now(timezone.utc).isoformat(),
-                "pubDate": pubdate
-            }
-            seen_items.append(entry)
-            seen_map[base_guid] = entry
-            newly_added_guids.append(latest["guid"])
-            prev_seen_guids.add(base_guid)
-
-    # merged = newest-per-site only (no history)
-    merged = []
-    seen_merge = set()
-    for it in new_items:
-        if it["guid"] not in seen_merge:
-            merged.append(it)
-            seen_merge.add(it["guid"])
-    merged = merged[:max_items]
-
-    # debug preview (only when logger is DEBUG)
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        logging.debug("Merged items preview (title, link, image, thumb, guid):")
-        for m in merged[:8]:
-            logging.debug("  %r | %r | image=%r thumb=%r guid=%r",
-                          m.get("title"), m.get("link"),
-                          m.get("image"), m.get("thumb"), m.get("guid"))
-
-    # ensure merged items use per-site thumb and rebuild description
-    from urllib.parse import urlparse, unquote
-    def _site_matches(link: str, s_url: str) -> bool:
-        if not link or not s_url:
-            return False
-        pl = urlparse(link)
-        ps = urlparse(s_url)
-        if (pl.netloc or "").lower() != (ps.netloc or "").lower():
-            return False
-        return unquote(pl.path).startswith(unquote(ps.path))
-
-    for item in merged:
-        link = item.get("link", "") or ""
-        matched_site = None
-        for s in sites:
-            if _site_matches(link, s.get("url", "")):
-                matched_site = s
-                break
-
-        # Force the per-site thumb when available; otherwise keep existing item thumb/image
-        if matched_site and matched_site.get("thumb"):
-            item["thumb"] = matched_site.get("thumb")
-        else:
-            item["thumb"] = item.get("thumb") or item.get("image") or ""
-
-        # ensure write_rss sees the same URL in image and thumb
-        if item.get("thumb"):
-            item["image"] = item["thumb"]
-
-        # rebuild description so the <img src="..."> uses the same thumb
-        title = item.get("title", "")
-        site_title = matched_site.get("title") if matched_site else (item.get("site_title") or "")
-        thumb = item.get("thumb") or item.get("image") or ""
-        item["description"] = (
-            f'<a href="{link}">'
-            f'<img src="{thumb}" alt="{escape(title)}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
-            f'</a>'
-            f'<div><a href="{link}">{escape(site_title or link)}</a><br/>{escape(title)}</div>'
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
         )
 
-    # ensure each merged item has a stable pubDate (prefer seen.pubDate, fallback to seen_at -> RFC2822)
-    for item in merged:
-        base = normalize_guid(item.get("guid", ""))
-        seen_entry = seen_map.get(base)
-        if seen_entry and isinstance(seen_entry, dict):
-            pd = seen_entry.get("pubDate")
-            if pd:
-                item["pubDate"] = pd
-            else:
-                seen_at = seen_entry.get("seen_at", "")
-                item["pubDate"] = seen_at_to_rfc2822(seen_at) if seen_at else now_rfc2822()
-                seen_entry["pubDate"] = item["pubDate"]
+        response.raise_for_status()
+
+        return response.text, response
+
+    except requests.RequestException as exc:
+        logging.warning("Could not fetch %s: %s", url, exc)
+        return None
+
+
+# ============================================================
+# Utility
+# ============================================================
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def now_rfc2822() -> str:
+    return format_datetime(now_utc())
+
+
+def atomic_write_text(path: str, text: str) -> None:
+    """Write a file atomically."""
+
+    directory = os.path.dirname(path) or "."
+
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=directory,
+        delete=False,
+    ) as tmp:
+
+        tmp.write(text)
+        temp_name = tmp.name
+
+    os.replace(temp_name, path)
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# ============================================================
+# Date handling
+# ============================================================
+
+DATE_PATTERNS = [
+    # ISO:
+    re.compile(
+        r"\b(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b"
+    ),
+
+    # YYYY-MM:
+    re.compile(
+        r"\b(20\d{2})[-/](0?[1-9]|1[0-2])\b"
+    ),
+]
+
+
+def parse_date_string(value: str) -> datetime | None:
+    """
+    Try to extract a date from a string.
+
+    This is deliberately NOT used to determine the newest release
+    from arbitrary links. It is only used on page metadata.
+    """
+
+    if not value:
+        return None
+
+    value = value.strip()
+
+    # ISO datetime
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        return dt.astimezone(timezone.utc)
+
+    except ValueError:
+        pass
+
+    # Date patterns
+    for pattern in DATE_PATTERNS:
+        match = pattern.search(value)
+
+        if not match:
+            continue
+
+        year = int(match.group(1))
+        month = int(match.group(2))
+
+        if match.lastindex >= 3:
+            day = int(match.group(3))
         else:
-            if not item.get("pubDate"):
-                item["pubDate"] = now_rfc2822()
-            if base not in seen_map:
-                entry = {
-                    "guid": item["guid"],
-                    "seen_at": datetime.now(timezone.utc).isoformat(),
-                    "pubDate": item["pubDate"]
-                }
-                seen_items.append(entry)
-                seen_map[base] = entry
+            day = 1
 
-    # write rss and seen (preserve the seen structure we built)
-    build_rss(merged, rss_file)
-    save_seen(seen_file, seen)
+        try:
+            return datetime(
+                year,
+                month,
+                day,
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            continue
 
-    return {"added": newly_added_guids, "total": len(merged)}
+    return None
 
 
+def extract_page_date(
+    soup: BeautifulSoup,
+    response: requests.Response,
+) -> tuple[datetime | None, str | None]:
+    """
+    Find the page's publication/modification date.
+
+    Priority:
+        1. article:modified_time
+        2. modified_time meta
+        3. <time datetime=...>
+        4. article:published_time
+        5. published_time meta
+        6. WordPress-style .updated
+        7. WordPress-style .entry-date
+        8. Last-Modified HTTP header
+    """
+
+    # --------------------------------------------------------
+    # OpenGraph / WordPress metadata
+    # --------------------------------------------------------
+
+    meta_names = [
+        "article:modified_time",
+        "modified_time",
+        "og:updated_time",
+        "article:published_time",
+        "published_time",
+    ]
+
+    for name in meta_names:
+
+        tag = soup.find(
+            "meta",
+            attrs={
+                "property": name,
+            },
+        )
+
+        if not tag:
+            tag = soup.find(
+                "meta",
+                attrs={
+                    "name": name,
+                },
+            )
+
+        if tag:
+            value = tag.get("content", "")
+
+            dt = parse_date_string(value)
+
+            if dt:
+                logging.debug(
+                    "Found page date from meta %s: %s",
+                    name,
+                    dt.isoformat(),
+                )
+
+                return dt, f"meta:{name}"
+
+    # --------------------------------------------------------
+    # <time datetime="">
+    # --------------------------------------------------------
+
+    for time_tag in soup.find_all("time"):
+
+        value = time_tag.get("datetime")
+
+        if value:
+            dt = parse_date_string(value)
+
+            if dt:
+                logging.debug(
+                    "Found page date from <time>: %s",
+                    dt.isoformat(),
+                )
+
+                return dt, "time:datetime"
+
+    # --------------------------------------------------------
+    # WordPress updated date
+    # --------------------------------------------------------
+
+    for selector in [
+        ".updated",
+        ".update",
+        ".modified",
+        ".post-modified",
+    ]:
+
+        tag = soup.select_one(selector)
+
+        if tag:
+            dt = parse_date_string(tag.get_text(" ", strip=True))
+
+            if dt:
+                logging.debug(
+                    "Found modified date using %s: %s",
+                    selector,
+                    dt.isoformat(),
+                )
+
+                return dt, f"selector:{selector}"
+
+    # --------------------------------------------------------
+    # WordPress published date
+    # --------------------------------------------------------
+
+    for selector in [
+        ".entry-date",
+        ".published",
+        ".post-date",
+    ]:
+
+        tag = soup.select_one(selector)
+
+        if tag:
+            dt = parse_date_string(tag.get_text(" ", strip=True))
+
+            if dt:
+                logging.debug(
+                    "Found published date using %s: %s",
+                    selector,
+                    dt.isoformat(),
+                )
+
+                return dt, f"selector:{selector}"
+
+    # --------------------------------------------------------
+    # HTTP Last-Modified
+    # --------------------------------------------------------
+
+    last_modified = response.headers.get("Last-Modified")
+
+    if last_modified:
+
+        try:
+            from email.utils import parsedate_to_datetime
+
+            dt = parsedate_to_datetime(last_modified)
+
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+
+            return dt.astimezone(timezone.utc), "http:last-modified"
+
+        except (TypeError, ValueError):
+            pass
+
+    return None, None
 
 
+# ============================================================
+# Article extraction
+# ============================================================
 
-# -----------------------
-# -----------------------
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--debug", action="store_true", help="Verbose logging")
-    p.add_argument("--max", type=int, default=MAX_ITEMS, help="Maximum items to keep in rss.xml")
-    args = p.parse_args()
+def find_main_content(soup: BeautifulSoup):
+    """
+    Try to isolate the actual article/post.
 
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    This is important.
+
+    We do NOT want navigation menus, related posts, footer links,
+    categories, etc. influencing the fingerprint.
+    """
+
+    selectors = [
+        "article",
+        ".entry-content",
+        ".post-content",
+        ".article-content",
+        ".td-post-content",
+        ".post-body",
+        "main",
+    ]
+
+    for selector in selectors:
+
+        element = soup.select_one(selector)
+
+        if element:
+            logging.debug(
+                "Main content selected using %s",
+                selector,
+            )
+            return element
+
+    logging.debug("Could not identify article; using <body>")
+
+    return soup.body or soup
+
+
+def clean_content(element) -> str:
+    """
+    Produce a stable textual representation of the meaningful page.
+
+    Remove things that change every request or aren't part of the post.
+    """
+
+    element = BeautifulSoup(
+        str(element),
+        "html.parser",
+    )
+
+    # Remove dynamic / irrelevant elements
+    for tag in element.select(
+        "script, style, noscript, iframe, "
+        "nav, footer, header, form"
+    ):
+        tag.decompose()
+
+    text = element.get_text(" ", strip=True)
+
+    return normalize_whitespace(text)
+
+
+# ============================================================
+# Release title
+# ============================================================
+
+def extract_title(
+    soup: BeautifulSoup,
+    site: dict,
+) -> str:
+    """
+    Prefer the actual article heading.
+
+    We deliberately do NOT derive the title from .rar links.
+    """
+
+    for selector in [
+        "article h1",
+        "main h1",
+        "h1.entry-title",
+        "h1.post-title",
+        "h1",
+    ]:
+
+        tag = soup.select_one(selector)
+
+        if tag:
+
+            title = normalize_whitespace(
+                tag.get_text(" ", strip=True)
+            )
+
+            if title:
+                return title
+
+    # OpenGraph fallback
+    meta = soup.find(
+        "meta",
+        attrs={"property": "og:title"},
+    )
+
+    if meta and meta.get("content"):
+        return normalize_whitespace(meta["content"])
+
+    # HTML title fallback
+    if soup.title and soup.title.string:
+        return normalize_whitespace(soup.title.string)
+
+    return site["title"]
+
+
+# ============================================================
+# Image
+# ============================================================
+
+def extract_thumbnail(
+    content,
+    base_url: str,
+    site: dict,
+) -> str:
+    """
+    Find an image belonging to the article.
+    """
+
+    for img in content.find_all("img"):
+
+        src = (
+            img.get("src")
+            or img.get("data-src")
+            or img.get("data-lazy-src")
+            or ""
+        )
+
+        if not src:
+            continue
+
+        return urljoin(base_url, src)
+
+    return site.get("thumb", "")
+
+
+# ============================================================
+# Fingerprint
+# ============================================================
+
+def build_fingerprint(
+    title: str,
+    content_text: str,
+) -> str:
+    """
+    Hash the meaningful page state.
+
+    This catches updates even if the site's modified date
+    is missing or broken.
+    """
+
+    material = (
+        title.strip()
+        + "\n"
+        + content_text.strip()
+    )
+
+    return sha256_text(material)
+
+
+# ============================================================
+# Site snapshot
+# ============================================================
+
+def inspect_site(site: dict) -> dict | None:
+    """
+    Fetch and inspect one site.
+
+    Returns a snapshot describing the current page state.
+    """
+
+    url = site["url"]
+
+    result = fetch_page(url)
+
+    if not result:
+        return None
+
+    html, response = result
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser",
+    )
+
+    # --------------------------------------------------------
+    # Identify article
+    # --------------------------------------------------------
+
+    content = find_main_content(soup)
+
+    # --------------------------------------------------------
+    # Title
+    # --------------------------------------------------------
+
+    title = extract_title(
+        soup,
+        site,
+    )
+
+    # --------------------------------------------------------
+    # Date
+    # --------------------------------------------------------
+
+    page_date, date_source = extract_page_date(
+        soup,
+        response,
+    )
+
+    # --------------------------------------------------------
+    # Meaningful text
+    # --------------------------------------------------------
+
+    content_text = clean_content(content)
+
+    # --------------------------------------------------------
+    # Thumbnail
+    # --------------------------------------------------------
+
+    thumb = extract_thumbnail(
+        content,
+        url,
+        site,
+    )
+
+    # --------------------------------------------------------
+    # Fingerprint
+    # --------------------------------------------------------
+
+    fingerprint = build_fingerprint(
+        title,
+        content_text,
+    )
+
+    logging.debug(
+        "Site: %s",
+        site["title"],
+    )
+
+    logging.debug(
+        "Title: %s",
+        title,
+    )
+
+    logging.debug(
+        "Page date: %s (%s)",
+        page_date.isoformat() if page_date else "none",
+        date_source or "none",
+    )
+
+    logging.debug(
+        "Fingerprint: %s",
+        fingerprint,
+    )
+
+    return {
+        "site_url": url,
+        "site_title": site["title"],
+        "title": title,
+        "page_date": (
+            page_date.isoformat()
+            if page_date
+            else None
+        ),
+        "date_source": date_source,
+        "fingerprint": fingerprint,
+        "thumb": thumb,
+        "content_text": content_text,
+    }
+
+
+# ============================================================
+# Change detection
+# ============================================================
+
+def determine_change(
+    previous: dict | None,
+    current: dict,
+) -> tuple[bool, str]:
+    """
+    Determine whether the page changed.
+
+    Strategy:
+
+    1. If fingerprint is different -> changed.
+    2. If modified date became newer -> changed.
+    3. Otherwise -> unchanged.
+
+    The fingerprint is the important safety net.
+    """
+
+    if previous is None:
+        return True, "first-seen"
+
+    old_fingerprint = previous.get("fingerprint")
+    new_fingerprint = current.get("fingerprint")
+
+    if (
+        old_fingerprint
+        and new_fingerprint
+        and old_fingerprint != new_fingerprint
+    ):
+        return True, "content-changed"
+
+    old_date = parse_date_string(
+        previous.get("page_date") or ""
+    )
+
+    new_date = parse_date_string(
+        current.get("page_date") or ""
+    )
+
+    if old_date and new_date and new_date > old_date:
+        return True, "modified-date-newer"
+
+    return False, "unchanged"
+
+
+# ============================================================
+# RSS
+# ============================================================
+
+def make_guid(
+    site_url: str,
+    fingerprint: str,
+) -> str:
+    """
+    Stable GUID for a particular page state.
+    """
+
+    return f"{site_url}|{fingerprint}"
+
+
+def make_description(
+    item: dict,
+) -> str:
+
+    title = escape(item.get("title", ""))
+    link = escape(item.get("link", ""))
+    site_title = escape(
+        item.get("site_title", "")
+    )
+
+    thumb = item.get("thumb", "")
+
+    image_html = ""
+
+    if thumb:
+        image_html = (
+            f'<a href="{link}">'
+            f'<img src="{escape(thumb)}" '
+            f'alt="{title}" '
+            f'style="max-width:200px;'
+            f'height:auto;display:block;'
+            f'margin-bottom:8px;" />'
+            f'</a>'
+        )
+
+    return (
+        image_html
+        + f"<div>"
+        f"<a href=\"{link}\">{site_title}</a>"
+        f"<br>{title}"
+        f"</div>"
+    )
+
+
+def write_rss(
+    items: list[dict],
+    output_file: str,
+    max_items: int,
+) -> None:
+
+    items = items[:max_items]
+
+    parts = []
+
+    parts.append(
+        '<?xml version="1.0" encoding="utf-8"?>'
+    )
+
+    parts.append(
+        '<rss version="2.0" '
+        'xmlns:media="http://search.yahoo.com/mrss/">'
+    )
+
+    parts.append("  <channel>")
+
+    parts.append(
+        f"    <title>{escape(FEED_TITLE)}</title>"
+    )
+
+    parts.append(
+        f"    <link>{escape(FEED_LINK)}</link>"
+    )
+
+    parts.append(
+        f"    <description>"
+        f"{escape(FEED_DESCRIPTION)}"
+        f"</description>"
+    )
+
+    parts.append(
+        f"    <lastBuildDate>{now_rfc2822()}</lastBuildDate>"
+    )
+
+    for item in items:
+
+        title = escape(
+            item.get("title", "")
+        )
+
+        link = escape(
+            item.get("link", "")
+        )
+
+        guid = escape(
+            item.get("guid", "")
+        )
+
+        pub_date = item.get(
+            "pubDate",
+            now_rfc2822(),
+        )
+
+        description = make_description(
+            item
+        )
+
+        parts.append("    <item>")
+
+        parts.append(
+            f"      <title>{title}</title>"
+        )
+
+        parts.append(
+            f"      <link>{link}</link>"
+        )
+
+        parts.append(
+            f'      <guid isPermaLink="false">'
+            f"{guid}"
+            f"</guid>"
+        )
+
+        parts.append(
+            f"      <pubDate>{pub_date}</pubDate>"
+        )
+
+        thumb = item.get("thumb", "")
+
+        if thumb:
+
+            parts.append(
+                f'      <media:thumbnail '
+                f'url="{escape(thumb)}" />'
+            )
+
+            parts.append(
+                f'      <media:content '
+                f'url="{escape(thumb)}" '
+                f'medium="image" />'
+            )
+
+        parts.append(
+            f"      <description>"
+            f"<![CDATA[{description}]]>"
+            f"</description>"
+        )
+
+        parts.append("    </item>")
+
+    parts.append("  </channel>")
+    parts.append("</rss>")
+
+    xml = "\n".join(parts)
+
+    atomic_write_text(
+        output_file,
+        xml,
+    )
+
+
+# ============================================================
+# State
+# ============================================================
+
+def load_state(path: str) -> dict:
+
+    if not os.path.exists(path):
+        return {
+            "sites": {},
+            "items": [],
+        }
 
     try:
-        res = update_feed_once(SITES, RSS_FILE, SEEN_FILE, max_items=args.max, debug=args.debug)
-        logging.info("Run complete. Result: %s", res)
+
+        with open(
+            path,
+            "r",
+            encoding="utf-8",
+        ) as f:
+
+            return json.load(f)
+
+    except Exception:
+
+        logging.warning(
+            "Could not read state file; starting fresh."
+        )
+
+        return {
+            "sites": {},
+            "items": [],
+        }
+
+
+def save_state(
+    path: str,
+    state: dict,
+) -> None:
+
+    atomic_write_text(
+        path,
+        json.dumps(
+            state,
+            indent=2,
+            ensure_ascii=False,
+        ),
+    )
+
+
+# ============================================================
+# Main update logic
+# ============================================================
+
+def update_feed(
+    sites: list[dict],
+    rss_file: str,
+    state_file: str,
+    max_items: int,
+) -> None:
+
+    state = load_state(state_file)
+
+    site_states = state.setdefault(
+        "sites",
+        {},
+    )
+
+    feed_items = state.setdefault(
+        "items",
+        [],
+    )
+
+    for site in sites:
+
+        logging.info(
+            "Checking %s",
+            site["title"],
+        )
+
+        current = inspect_site(site)
+
+        if not current:
+
+            logging.warning(
+                "Could not inspect %s",
+                site["url"],
+            )
+
+            continue
+
+        site_key = site["url"]
+
+        previous = site_states.get(
+            site_key
+        )
+
+        changed, reason = determine_change(
+            previous,
+            current,
+        )
+
+        logging.info(
+            "Result: %s (%s)",
+            "CHANGED" if changed else "unchanged",
+            reason,
+        )
+
+        # ----------------------------------------------------
+        # First run
+        # ----------------------------------------------------
+
+        if previous is None:
+
+            # Save baseline but don't necessarily create
+            # an RSS notification on the first run.
+            #
+            # Change this to True if you want the first
+            # execution to create an RSS item.
+
+            create_initial_item = False
+
+            site_states[site_key] = current
+
+            if not create_initial_item:
+                continue
+
+        # ----------------------------------------------------
+        # Update detected
+        # ----------------------------------------------------
+
+        elif changed:
+
+            site_states[site_key] = current
+
+        else:
+
+            # Keep state fresh even if nothing changed.
+            site_states[site_key] = current
+            continue
+
+        # ----------------------------------------------------
+        # Create RSS item
+        # ----------------------------------------------------
+
+        pub_date = now_rfc2822()
+
+        if current.get("page_date"):
+
+            parsed = parse_date_string(
+                current["page_date"]
+            )
+
+            if parsed:
+                pub_date = format_datetime(
+                    parsed
+                )
+
+        fingerprint = current[
+            "fingerprint"
+        ]
+
+        guid = make_guid(
+            site_key,
+            fingerprint,
+        )
+
+        item = {
+            "title": current["title"],
+            "link": site_key,
+            "guid": guid,
+            "pubDate": pub_date,
+            "description": "",
+            "thumb": current.get(
+                "thumb",
+                "",
+            ),
+            "site_title": current[
+                "site_title"
+            ],
+        }
+
+        item["description"] = make_description(
+            item
+        )
+
+        # Don't duplicate an already-created RSS item.
+        existing_guids = {
+            x.get("guid")
+            for x in feed_items
+            if isinstance(x, dict)
+        }
+
+        if guid not in existing_guids:
+
+            feed_items.insert(
+                0,
+                item,
+            )
+
+            logging.info(
+                "Added RSS item: %s",
+                current["title"],
+            )
+
+    # --------------------------------------------------------
+    # Limit RSS history
+    # --------------------------------------------------------
+
+    feed_items = feed_items[:max_items]
+
+    state["items"] = feed_items
+
+    # --------------------------------------------------------
+    # Write files
+    # --------------------------------------------------------
+
+    write_rss(
+        feed_items,
+        rss_file,
+        max_items,
+    )
+
+    save_state(
+        state_file,
+        state,
+    )
+
+
+# ============================================================
+# CLI
+# ============================================================
+
+def main() -> int:
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable verbose logging",
+    )
+
+    parser.add_argument(
+        "--max",
+        type=int,
+        default=MAX_ITEMS,
+        help="Maximum RSS items",
+    )
+
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=(
+            logging.DEBUG
+            if args.debug
+            else logging.INFO
+        ),
+        format=(
+            "%(asctime)s "
+            "%(levelname)s: "
+            "%(message)s"
+        ),
+    )
+
+    try:
+
+        update_feed(
+            SITES,
+            RSS_FILE,
+            STATE_FILE,
+            args.max,
+        )
+
+        logging.info(
+            "Feed generation completed."
+        )
+
         return 0
-    except Exception as e:
-        logging.exception("Error during update: %s", e)
+
+    except Exception:
+
+        logging.exception(
+            "Feed generation failed."
+        )
+
         return 1
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
