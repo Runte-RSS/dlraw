@@ -1,671 +1,248 @@
-#!/usr/bin/env python3
-"""
-generate_feed.py
-
-Auto-generate an RSS feed (rss.xml) from one or more dlraw-style index pages.
-- Writes rss.xml and seen.json in the current directory.
-- Runs a single iteration and exits (scheduling should be handled by your workflow/cron).
-- Easy to add more sites: edit the SITES list below.
-- Keeps only newest releases (per-site canonicalization).
-- Each item includes a link back to the dlraw index page (not to mirror hosts),
-  a description with an <img> thumbnail, and media/enclosure tags.
-
-Usage:
-    python generate_feed.py            # run once and exit
-    python generate_feed.py --debug    # verbose logging
-    python generate_feed.py --max 40   # keep up to 40 items in feed
-
-Dependencies:
-    pip install requests beautifulsoup4
-"""
-
-from __future__ import annotations
-import os
-import re
-import json
-from pathlib import Path
-import argparse
-import logging
-from email.utils import format_datetime
-from urllib.parse import urljoin
-import xml.etree.ElementTree as ET
-import hashlib   # add at top of file if not already present
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timezone
-from xml.sax.saxutils import escape
-from xml.dom import minidom
-import tempfile
-
-# -----------------------
-# Configuration: add sites here
-# -----------------------
-SITES = [
-   {
-        "title": "Youjo Senki",
-        "url": "https://dl-raw.si/%e5%b9%bc%e5%a5%b3%e6%88%a6%e8%a8%98-raw/",
-        "thumb": "https://puu.sh/KR4oa.png",
-    },{
-        "title": "Isekai Meikyuu de Harem wo",
-        "url": "https://dl-raw.si/%e7%95%b0%e4%b8%96%e7%95%8c%e8%bf%b7%e5%ae%ae%e3%81%a7%e3%83%8f%e3%83%bc%e3%83%ac%e3%83%a0%e3%82%92-raw/",
-        "thumb": "https://static.zerochan.net/Isekai.Meikyuu.de.Harem.wo.1024.3730804.webp",
-    },{
-        "title": "Aoki Hagane no Arpeggio",
-        "url": "https://dl-raw.si/%e8%92%bc%e3%81%8d%e9%8b%bc%e3%81%ae%e3%82%a2%e3%83%ab%e3%83%9a%e3%82%b8%e3%82%aa-raw/",
-        "thumb": "https://puu.sh/KR4o5.png",
-    },{
-        "title": "Kage no Jitsuryokusha ni Naritakute",
-        "url": "https://dl-raw.si/%e9%99%b0%e3%81%ae%e5%ae%9f%e5%8a%9b%e8%80%85%e3%81%ab%e3%81%aa%e3%82%8a%e3%81%9f%e3%81%8f%e3%81%a6%ef%bc%81-raw/",
-        "thumb": "https://puu.sh/KKZDj.png",
-    },{
-        "title": "Kurotsuki no Yerknacht",
-        "url": "https://dl-raw.si/%e9%bb%92%e6%9c%88%e3%81%ae%e3%82%a4%e3%82%a7%e3%83%ab%e3%82%af%e3%83%8a%e3%83%8f%e3%83%88-raw/",
-        "thumb": "https://puu.sh/KKZDv.jpg",
-    },{
-        "title": "Tsuki Michibiku Isekai Douchuu",
-        "url": "https://dl-raw.si/%e6%9c%88%e3%81%8c%e5%b0%8e%e3%81%8f%e7%95%b0%e4%b8%96%e7%95%8c%e9%81%93%e4%b8%ad-raw/",
-        "thumb": "https://puu.sh/KKZDW.jpg",
-    },{
-        "title": "Kage no jitsuryokusha ni naritakute masuta obu gaden shichikage retsuden",
-        "url": "https://dl-raw.si/%e9%99%b0%e3%81%ae%e5%ae%9f%e5%8a%9b%e8%80%85%e3%81%ab%e3%81%aa%e3%82%8a%e3%81%9f%e3%81%8f%e3%81%a6%ef%bc%81%e3%83%9e%e3%82%b9%e3%82%bf%e3%83%bc%e3%82%aa%e3%83%96%e3%82%ac%e3%83%bc%e3%83%87%e3%83%b3/",
-        "thumb": "https://puu.sh/KR4nM.jpg",
-    },{
-        "title": "Tenseishitara slime datta ken",
-        "url": "https://dl-raw.si/%e8%bb%a2%e7%94%9f%e3%81%97%e3%81%9f%e3%82%89%e3%82%b9%e3%83%a9%e3%82%a4%e3%83%a0%e3%81%a0%e3%81%a3%e3%81%9f%e4%bb%b6-raw/",
-        "thumb": "https://puu.sh/KOdNv.png",
-    }
-    # Add more sites here as needed:
-    # {"title": "Another Series", "url": "https://dlraw.cc/.../", "thumb": "https://..."},
-]
-
-# Feed metadata
-FEED_TITLE = "DL-Raw Watchlist"
-FEED_LINK = "https://example.com/"
-FEED_DESC = "Auto-generated manga feed (dlraw watcher)"
-RSS_FILE = "rss.xml"
-SEEN_FILE = "seen.json"
-MAX_ITEMS = 50  # keep this many items in the feed
-
-# HTTP settings (place near top of file)
-REQUEST_TIMEOUT = 20.0
-USER_AGENT = "MangaFeedBot/1.0 (+https://example.com/)"
-HEADERS = {"User-Agent": USER_AGENT}
-
-_GUID_THUMB_RE = re.compile(r"^(.*)\|[0-9a-fA-F]{8}$")
-
-def seen_at_to_rfc2822(seen_at_iso: str) -> str:
-    """
-    Convert ISO timestamp (seen_at) to RFC-2822 string used for pubDate.
-    If conversion fails, return now_rfc2822() as fallback.
-    """
-    try:
-        # parse ISO with timezone if present
-        dt = datetime.fromisoformat(seen_at_iso)
-        # ensure timezone-aware
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return format_datetime(dt)
-    except Exception:
-        return now_rfc2822()
-
-p = Path("seen.json")
-if p.exists():
-    data = json.loads(p.read_text(encoding="utf-8"))
-    items = data.get("items", [])
-    changed = False
-    for it in items:
-        if isinstance(it, dict) and not it.get("pubDate"):
-            seen_at = it.get("seen_at", "")
-            if seen_at:
-                it["pubDate"] = seen_at_to_rfc2822(seen_at)
-                changed = True
-    if changed:
-        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        
-def normalize_guid(guid: str) -> str:
-    """
-    Return the canonical GUID used for seen/dedup checks.
-    If guid ends with |<8-hex>, strip that suffix; otherwise return guid unchanged.
-    """
-    if not guid:
-        return guid
-    m = _GUID_THUMB_RE.match(guid)
-    return m.group(1) if m else guid
-
-def _head_length_and_type(url):
-    try:
-        r = requests.head(url, allow_redirects=True, timeout=5)
-        ctype = r.headers.get("Content-Type", "")
-        clen = r.headers.get("Content-Length")
-        return (ctype or "", int(clen) if clen and clen.isdigit() else None)
-    except Exception:
-        return ("", None)
-
-# simple fetch helper used by gather_latest_from_site
-def fetch_page(url: str) -> str | None:
-    try:
-        import requests
-        r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        return r.text
-    except Exception as e:
-        logging.debug("fetch_page error for %s: %s", url, e)
-        return None
-
-
-# MIME helper
-MIME_BY_EXT = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".svg": "image/svg+xml",
-    ".bmp": "image/bmp",
-}
-
-def mime_for_url(url: str) -> str:
-    if not url:
-        return "image/jpeg"
-    u = url.split("?", 1)[0].split("#", 1)[0].lower()
-    for ext, m in MIME_BY_EXT.items():
-        if u.endswith(ext):
-            return m
-    return "image/jpeg"
-# --- simple heuristics to detect release-like text ---
-RAR_RE = re.compile(r"\.rar\b", flags=re.I)
-
-def is_rar_like(text: str) -> bool:
-    """
-    Return True for strings that look like release filenames or version tokens,
-    e.g. 'Young_King_Ours_2026-04.rar', 'Senki_v34.rar', 'v34', '2026-04.rar'.
-    """
-    if not text:
-        return False
-    t = text.strip()
-    # obvious .rar filename
-    if RAR_RE.search(t):
-        return True
-    # date-like YYYY-MM or YYYY_MM
-    if re.search(r"\b20\d{2}[-_.]?(0[1-9]|1[0-2])\b", t):
-        return True
-    # vNN pattern
-    if re.search(r"\bv\s?0*[0-9]+\b", t, flags=re.I):
-        return True
-    # trailing numeric tokens like _34 or -34 or v34
-    if re.search(r"[_\-\s]v?0*[0-9]{1,6}\b", t, flags=re.I):
-        return True
-    return False
-
-# -----------------------
-# Parsing/version heuristics
-# -----------------------
-DATE_RE = re.compile(r"(20\d{2})[._-]?(0[1-9]|1[0-2])")
-VNUM_RE = re.compile(r"\bv\s?0*([0-9]+)\b", flags=re.I)
-TRAIL_NUM_RE = re.compile(r"[_\-\s]v?0*([0-9]+)(?:\.[a-zA-Z0-9]+)?$", flags=re.I)
-RAR_RE = re.compile(r"\.rar\b", flags=re.I)
-
-# --- normalize candidate text (strip mirror noise) ---
-def normalize_candidate_text(s: str) -> str:
-    if not s:
-        return ""
-    t = s.strip()
-    # remove common mirror host suffixes like "(uploaded by ...)" or "[host]" or trailing " - host"
-    t = re.sub(r"\(.*?\)$", "", t)
-    t = re.sub(r"\[.*?\]$", "", t)
-    t = re.sub(r"-\s*uploaded.*$", "", t, flags=re.I)
-    t = re.sub(r"\s+[-–—]\s+.*$", "", t)  # remove trailing " - something"
-    t = t.strip(" \t\n\r\"'_-")
-    return t
-
-
-# --- improved version key extraction (numeric, prefer largest vN) ---
-def extract_version_key(title: str):
-    """
-    Return a tuple for comparison. Higher tuple sorts later (newer).
-    Priority:
-      3 -> date-like YYYY-MM (year, month)
-      2 -> vNN (use max v found)
-      1 -> any numeric tokens (use max number)
-      0 -> fallback (string)
-    """
-    t = normalize_candidate_text(title or "")
-    # date-like YYYY-MM
-    m = DATE_RE.search(t)
-    if m:
-        year = int(m.group(1)); month = int(m.group(2))
-        return (3, year, month, t)
-
-    # collect all vN occurrences and pick the largest
-    # allow separators like start, space, underscore, or hyphen before 'v'
-    vnums = [int(x) for x in re.findall(r"(?:^|[_\-\s])v\s?0*([0-9]+)\b", t, flags=re.I)]
-    if vnums:
-        return (2, max(vnums), t)
-
-    # collect any numeric tokens and pick the largest
-    # look for numbers preceded by separator or start to avoid matching years inside words
-    nums = [int(x) for x in re.findall(r"(?:^|[_\-\s])0*([0-9]{1,6})\b", t)]
-    if nums:
-        return (1, max(nums), t)
-
-    # fallback: use the raw normalized title (lowest priority)
-    return (0, 0, t)
-
-# --- improved dlraw index parsing: inspect anchor text and href filename ---
-def parse_dlraw_index(html: str, base_url: str):
-    soup = BeautifulSoup(html, "html.parser")
-    candidates = []
-
-    # 1) anchors: inspect both anchor text and href last path segment
-    for a in soup.find_all("a"):
-        text = (a.get_text() or "").strip()
-        href = a.get("href") or ""
-        # normalize and test anchor text
-        nt = normalize_candidate_text(text)
-        if nt and is_rar_like(nt):
-            candidates.append({"title": nt, "link": base_url, "thumb": None})
-            continue
-        # inspect href last segment (filename)
-        if href:
-            last = href.split("/")[-1].strip()
-            last = normalize_candidate_text(last)
-            if last and is_rar_like(last):
-                candidates.append({"title": last, "link": base_url, "thumb": None})
-                continue
-
-    # 2) fallback: text nodes (if no anchor candidates found)
-    if not candidates:
-        for tag in soup.find_all(string=True):
-            txt = tag.strip()
-            if not txt:
-                continue
-            nt = normalize_candidate_text(txt)
-            if nt and is_rar_like(nt):
-                candidates.append({"title": nt, "link": base_url, "thumb": None})
-
-    # 3) fallback: page title
-    if not candidates:
-        page_title = soup.title.string.strip() if soup.title and soup.title.string else None
-        if page_title:
-            candidates.append({"title": normalize_candidate_text(page_title), "link": base_url, "thumb": None})
-
-    # 4) find a thumbnail (first reasonable <img>)
-    thumb = None
-    for img in soup.find_all("img"):
-        src = img.get("src") or img.get("data-src") or ""
-        if not src:
-            continue
-        thumb = urljoin(base_url, src)
-        break
-
-    if thumb:
-        for c in candidates:
-            c["thumb"] = thumb
-
-    return candidates
-
-
-def gather_latest_from_site(site: dict) -> dict | None:
-    url = site["url"]
-    html = fetch_page(url)
-
-    # canonical site URL and optional per-site thumbnail
-    site_url = site.get("url", "")
-    site_thumb = site.get("thumb", "")   # per-site default thumb (if any)
-
-    if not html:
-        logging.debug("Failed to fetch %s", url)
-        return None
-
-    # parse candidates from the index page (your existing parser)
-    candidates = parse_dlraw_index(html, url)
-    if not candidates:
-        logging.debug("No candidates found on %s", url)
-        return None
-
-    # debug: show all candidates and their keys
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        logging.debug("Candidates for %s:", url)
-        for c in candidates:
-            logging.debug("  %r -> key=%r", c["title"], extract_version_key(c["title"]))
-
-    # pick the newest candidate by our version key
-    best = None
-    best_key = None
-    for c in candidates:
-        key = extract_version_key(c["title"])
-        if best is None or key > best_key:
-            best = c
-            best_key = key
-
-    # debug: chosen best
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        logging.debug("Chosen best for %s: %r key=%r", url, best["title"] if best else None, best_key)
-
-    if best is None:
-        return None
-
-    # build the item dict now that we have the chosen candidate
-    title = best["title"]
-    pubDate = now_rfc2822()
-    # prefer item-specific thumb, then site default
-    thumb = best.get("thumb") or site.get("thumb") or ""
-    desc_html = (
-        f'<a href="{url}">'
-        f'<img src="{thumb}" alt="{escape(title)}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
-        f'</a>'
-        f'<div><a href="{url}">{escape(site.get("title") or url)}</a><br/>{escape(title)}</div>'
-    )
-
-    # compute GUID and include a short hash of the thumb so readers notice thumbnail changes
-    thumb_hash = hashlib.sha1((thumb or "").encode()).hexdigest()[:8]
-    guid = make_guid(site_url, title) + "|" + thumb_hash
-
-    latest = {
-        "title": title,
-        "link": url,
-        "guid": guid,
-        "pubDate": pubDate,
-        "description": desc_html,
-        "image": thumb,
-        # also expose thumb explicitly for write_rss to prefer
-        "thumb": thumb,
-    }
-
-    return latest
-
-
-
-
-# -----------------------
-# Feed and seen handling
-# -----------------------
-def load_seen(path: str) -> dict:
-    if not os.path.exists(path):
-        return {"items": []}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"items": []}
-
-def save_seen(path: str, seen: dict):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(seen, f, indent=2, ensure_ascii=False)
-
-def make_guid(site_url: str, title: str) -> str:
-    return f"{site_url}|{title}"
-
-def now_rfc2822():
-    return format_datetime(datetime.now(timezone.utc))
-
-def write_rss(channel_title, channel_link, channel_desc, items, out_file):
-    """
-    Write a simple RSS 2.0 feed to out_file.
-    - channel_title, channel_link, channel_desc: strings
-    - items: list of dicts with keys: title, link, guid, pubDate, description, image
-    """
-    items = items[:MAX_ITEMS]
-
-    # build raw XML string (use CDATA for description so HTML is preserved)
-    parts = []
-    parts.append('<?xml version="1.0" encoding="utf-8"?>')
-    parts.append('<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">')
-    parts.append('  <channel>')
-    parts.append(f'    <title>{escape(channel_title)}</title>')
-    parts.append(f'    <link>{escape(channel_link)}</link>')
-    parts.append(f'    <description>{escape(channel_desc)}</description>')
-    parts.append(f'    <lastBuildDate>{now_rfc2822()}</lastBuildDate>')
-
-    # optional channel image from first item
-    channel_image_url = ""
-    if items and items[0].get("image"):
-        channel_image_url = items[0]["image"]
-        parts.append('    <image>')
-        parts.append(f'      <url>{escape(channel_image_url)}</url>')
-        parts.append(f'      <title>{escape(channel_title)}</title>')
-        parts.append(f'      <link>{escape(channel_link)}</link>')
-        parts.append('    </image>')
-
-    # ---------- per-item entries (must be indented inside the function) ----------
-    for it in items:
-        title = escape(it.get("title", ""))
-        link = escape(it.get("link", ""))
-        guid = escape(it.get("guid", ""))
-        pubDate = it.get("pubDate", "")
-        # description may contain HTML; wrap in CDATA
-        desc = it.get("description", "")
-        if "]]>" in desc:
-            desc_block = escape(desc)
-        else:
-            desc_block = f"<![CDATA[{desc}]]>"
-
-        parts.append('    <item>')
-        parts.append(f'      <title>{title}</title>')
-        parts.append(f'      <link>{link}</link>')
-        parts.append(f'      <guid isPermaLink="false">{guid}</guid>')
-        parts.append(f'      <pubDate>{pubDate}</pubDate>')
-
-        # image selection: prefer per-item thumb, then item image, then channel image
-        image = it.get("thumb") or it.get("image") or channel_image_url or ""
-        if image:
-            # normalize to absolute https
-            if image.startswith("//"):
-                image = "https:" + image
-            if image.startswith("http://"):
-                image = image.replace("http://", "https://", 1)
-
-            # media tags
-            parts.append(f'      <media:thumbnail url="{escape(image)}" />')
-            parts.append(f'      <media:content url="{escape(image)}" medium="image" />')
-
-            # enclosure with MIME type (simple fallback)
-            ctype = it.get("_mime") or ""
-            if not ctype:
-                if image.lower().endswith(".png"):
-                    ctype = "image/png"
-                elif image.lower().endswith((".jpg", ".jpeg")):
-                    ctype = "image/jpeg"
-                elif image.lower().endswith(".webp"):
-                    ctype = "image/webp"
-                else:
-                    ctype = "image/*"
-            parts.append(f'      <enclosure url="{escape(image)}" type="{escape(ctype)}" />')
-
-        parts.append(f'      <description>{desc_block}</description>')
-        parts.append('    </item>')
-
-    parts.append('  </channel>')
-    parts.append('</rss>')
-
-    raw = "\n".join(parts).encode("utf-8")
-    with open(out_file, "wb") as f:
-        f.write(raw)
-
-
-    # pretty-print using minidom (works reliably across Python versions)
-    try:
-        dom = minidom.parseString(raw)
-        pretty = dom.toprettyxml(indent="  ", encoding="utf-8")
-    except Exception:
-        # fallback: write raw if minidom fails
-        pretty = raw
-
-    # atomic write to out_file
-    dirpath = os.path.dirname(out_file) or "."
-    with tempfile.NamedTemporaryFile("wb", dir=dirpath, delete=False) as tf:
-        tf.write(pretty)
-        tempname = tf.name
-    os.replace(tempname, out_file)
-
-def build_rss(items: list[dict], out_file: str):
-    """
-    Backwards-compatible wrapper so existing code that calls build_rss
-    continues to work while using the new write_rss implementation.
-    """
-    # write_rss expects channel title/link/description first
-    return write_rss(FEED_TITLE, FEED_LINK, FEED_DESC, items, out_file)
-
-
-
-def update_feed_once(sites: list[dict], rss_file: str, seen_file: str, max_items: int = MAX_ITEMS, debug: bool = False):
-    # load seen and build a normalized set/map of GUIDs that were seen before this run
-    seen = load_seen(seen_file)
-    seen_items = seen.setdefault("items", [])
-    prev_seen_guids = set()
-    seen_map = {}
-    for it in seen_items:
-        raw = it if isinstance(it, str) else it.get("guid")
-        if not raw:
-            continue
-        base = normalize_guid(raw)
-        prev_seen_guids.add(base)
-        # prefer the most recent dict entry for this base GUID
-        if isinstance(it, dict):
-            seen_map[base] = it
-        else:
-            # convert old string entries into dict form for uniformity
-            seen_map.setdefault(base, {"guid": raw, "seen_at": "", "pubDate": ""})
-
-    new_items = []
-    newly_added_guids = []
-
-    # gather latest from each site
-    for site in sites:
-        if debug:
-            logging.info("Checking site: %s", site["url"])
-        latest = gather_latest_from_site(site)
-        if not latest:
-            if debug:
-                logging.info("No latest found for %s", site["url"])
-            continue
-
-        # include latest in merged feed
-        new_items.append(latest)
-
-        # normalized membership check to avoid duplicates when GUID suffix changed
-        base_guid = normalize_guid(latest["guid"])
-        if base_guid not in prev_seen_guids:
-            # record as seen with timestamp and stable pubDate
-            pubdate = now_rfc2822()
-            entry = {
-                "guid": latest["guid"],
-                "seen_at": datetime.now(timezone.utc).isoformat(),
-                "pubDate": pubdate
-            }
-            seen_items.append(entry)
-            seen_map[base_guid] = entry
-            newly_added_guids.append(latest["guid"])
-            prev_seen_guids.add(base_guid)
-
-    # merged = newest-per-site only (no history)
-    merged = []
-    seen_merge = set()
-    for it in new_items:
-        if it["guid"] not in seen_merge:
-            merged.append(it)
-            seen_merge.add(it["guid"])
-    merged = merged[:max_items]
-
-    # debug preview (only when logger is DEBUG)
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        logging.debug("Merged items preview (title, link, image, thumb, guid):")
-        for m in merged[:8]:
-            logging.debug("  %r | %r | image=%r thumb=%r guid=%r",
-                          m.get("title"), m.get("link"),
-                          m.get("image"), m.get("thumb"), m.get("guid"))
-
-    # ensure merged items use per-site thumb and rebuild description
-    from urllib.parse import urlparse, unquote
-    def _site_matches(link: str, s_url: str) -> bool:
-        if not link or not s_url:
-            return False
-        pl = urlparse(link)
-        ps = urlparse(s_url)
-        if (pl.netloc or "").lower() != (ps.netloc or "").lower():
-            return False
-        return unquote(pl.path).startswith(unquote(ps.path))
-
-    for item in merged:
-        link = item.get("link", "") or ""
-        matched_site = None
-        for s in sites:
-            if _site_matches(link, s.get("url", "")):
-                matched_site = s
-                break
-
-        # Force the per-site thumb when available; otherwise keep existing item thumb/image
-        if matched_site and matched_site.get("thumb"):
-            item["thumb"] = matched_site.get("thumb")
-        else:
-            item["thumb"] = item.get("thumb") or item.get("image") or ""
-
-        # ensure write_rss sees the same URL in image and thumb
-        if item.get("thumb"):
-            item["image"] = item["thumb"]
-
-        # rebuild description so the <img src="..."> uses the same thumb
-        title = item.get("title", "")
-        site_title = matched_site.get("title") if matched_site else (item.get("site_title") or "")
-        thumb = item.get("thumb") or item.get("image") or ""
-        item["description"] = (
-            f'<a href="{link}">'
-            f'<img src="{thumb}" alt="{escape(title)}" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" />'
-            f'</a>'
-            f'<div><a href="{link}">{escape(site_title or link)}</a><br/>{escape(title)}</div>'
-        )
-
-    # ensure each merged item has a stable pubDate (prefer seen.pubDate, fallback to seen_at -> RFC2822)
-    for item in merged:
-        base = normalize_guid(item.get("guid", ""))
-        seen_entry = seen_map.get(base)
-        if seen_entry and isinstance(seen_entry, dict):
-            pd = seen_entry.get("pubDate")
-            if pd:
-                item["pubDate"] = pd
-            else:
-                seen_at = seen_entry.get("seen_at", "")
-                item["pubDate"] = seen_at_to_rfc2822(seen_at) if seen_at else now_rfc2822()
-                seen_entry["pubDate"] = item["pubDate"]
-        else:
-            if not item.get("pubDate"):
-                item["pubDate"] = now_rfc2822()
-            if base not in seen_map:
-                entry = {
-                    "guid": item["guid"],
-                    "seen_at": datetime.now(timezone.utc).isoformat(),
-                    "pubDate": item["pubDate"]
-                }
-                seen_items.append(entry)
-                seen_map[base] = entry
-
-    # write rss and seen (preserve the seen structure we built)
-    build_rss(merged, rss_file)
-    save_seen(seen_file, seen)
-
-    return {"added": newly_added_guids, "total": len(merged)}
-
-
-
-
-
-# -----------------------
-# -----------------------
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--debug", action="store_true", help="Verbose logging")
-    p.add_argument("--max", type=int, default=MAX_ITEMS, help="Maximum items to keep in rss.xml")
-    args = p.parse_args()
-
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-
-    try:
-        res = update_feed_once(SITES, RSS_FILE, SEEN_FILE, max_items=args.max, debug=args.debug)
-        logging.info("Run complete. Result: %s", res)
-        return 0
-    except Exception as e:
-        logging.exception("Error during update: %s", e)
-        return 1
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+  
+  
+  <channel>
+    
+    
+    <title>DL-Raw Watchlist</title>
+    
+    
+    <link>https://example.com/</link>
+    
+    
+    <description>Auto-generated manga feed (dlraw watcher)</description>
+    
+    
+    <lastBuildDate>Sun, 17 May 2026 17:45:21 +0000</lastBuildDate>
+    
+    
+    <image>
+      
+      
+      <url>https://puu.sh/KL75X.png</url>
+      
+      
+      <title>DL-Raw Watchlist</title>
+      
+      
+      <link>https://example.com/</link>
+      
+    
+    </image>
+    
+    
+    <item>
+      
+      
+      <title>Youjo_Senki_v34.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/|Youjo_Senki_v34.rar.html|2944783e</guid>
+      
+      
+      <pubDate>Thu, 02 Apr 2026 23:10:27 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://puu.sh/KKZc7.png"/>
+      
+      
+      <media:content url="https://puu.sh/KKZc7.png" medium="image"/>
+      
+      
+      <enclosure url="https://puu.sh/KKZc7.png" type="image/png"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/"><img src="https://puu.sh/KKZc7.png" alt="Youjo_Senki_v34.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E5%B9%BC%E5%A5%B3%E6%88%A6%E8%A8%98/">Youjo Senki</a><br/>Youjo_Senki_v34.rar.html</div>]]></description>
+      
+    
+    </item>
+    
+    
+    <item>
+      
+      
+      <title>Isekai_Meikyu_de_Haremu_v12.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/|Isekai_Meikyu_de_Haremu_v12.rar.html|2944783e</guid>
+      
+      
+      <pubDate>Thu, 02 Apr 2026 23:10:28 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://static.zerochan.net/Isekai.Meikyuu.de.Harem.wo.1024.3730804.webp"/>
+      
+      
+      <media:content url="https://static.zerochan.net/Isekai.Meikyuu.de.Harem.wo.1024.3730804.webp" medium="image"/>
+      
+      
+      <enclosure url="https://static.zerochan.net/Isekai.Meikyuu.de.Harem.wo.1024.3730804.webp" type="image/webp"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/"><img src="https://static.zerochan.net/Isekai.Meikyuu.de.Harem.wo.1024.3730804.webp" alt="Isekai_Meikyu_de_Haremu_v12.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E7%95%B0%E4%B8%96%E7%95%8C%E8%BF%B7%E5%AE%AE%E3%81%A7%E3%83%8F%E3%83%BC%E3%83%AC%E3%83%A0%E3%82%92/">Isekai Meikyuu de Harem wo</a><br/>Isekai_Meikyu_de_Haremu_v12.rar.html</div>]]></description>
+      
+    
+    </item>
+    
+    
+    <item>
+      
+      
+      <title>Aoki_Hagane_no_Arpeggio_v30.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E8%92%BC%E3%81%8D%E9%8B%BC%E3%81%AE%E3%82%A2%E3%83%AB%E3%83%9A%E3%82%B8%E3%82%AA/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E8%92%BC%E3%81%8D%E9%8B%BC%E3%81%AE%E3%82%A2%E3%83%AB%E3%83%9A%E3%82%B8%E3%82%AA/|Aoki_Hagane_no_Arpeggio_v30.rar.html|2944783e</guid>
+      
+      
+      <pubDate>Thu, 02 Apr 2026 23:10:29 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://puu.sh/KKZB1.jpg"/>
+      
+      
+      <media:content url="https://puu.sh/KKZB1.jpg" medium="image"/>
+      
+      
+      <enclosure url="https://puu.sh/KKZB1.jpg" type="image/jpeg"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E8%92%BC%E3%81%8D%E9%8B%BC%E3%81%AE%E3%82%A2%E3%83%AB%E3%83%9A%E3%82%B8%E3%82%AA/"><img src="https://puu.sh/KKZB1.jpg" alt="Aoki_Hagane_no_Arpeggio_v30.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E8%92%BC%E3%81%8D%E9%8B%BC%E3%81%AE%E3%82%A2%E3%83%AB%E3%83%9A%E3%82%B8%E3%82%AA/">Aoki Hagane no Arpeggio</a><br/>Aoki_Hagane_no_Arpeggio_v30.rar.html</div>]]></description>
+      
+    
+    </item>
+    
+    
+    <item>
+      
+      
+      <title>Kage_no_Jitsuryokusha_ni_v17.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81/|Kage_no_Jitsuryokusha_ni_v17.rar.html|2944783e</guid>
+      
+      
+      <pubDate>Thu, 02 Apr 2026 23:10:30 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://puu.sh/KKZDj.png"/>
+      
+      
+      <media:content url="https://puu.sh/KKZDj.png" medium="image"/>
+      
+      
+      <enclosure url="https://puu.sh/KKZDj.png" type="image/png"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81/"><img src="https://puu.sh/KKZDj.png" alt="Kage_no_Jitsuryokusha_ni_v17.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81/">Kage no Jitsuryokusha ni Naritakute</a><br/>Kage_no_Jitsuryokusha_ni_v17.rar.html</div>]]></description>
+      
+    
+    </item>
+    
+    
+    <item>
+      
+      
+      <title>Kurotsuki_no_Yerknacht_v04.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%BB%92%E6%9C%88%E3%81%AE%E3%82%A4%E3%82%A7%E3%83%AB%E3%82%AF%E3%83%8A%E3%83%8F%E3%83%88/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%BB%92%E6%9C%88%E3%81%AE%E3%82%A4%E3%82%A7%E3%83%AB%E3%82%AF%E3%83%8A%E3%83%8F%E3%83%88/|Kurotsuki_no_Yerknacht_v04.rar.html|2944783e</guid>
+      
+      
+      <pubDate>Sat, 16 May 2026 09:18:29 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://puu.sh/KKZDv.jpg"/>
+      
+      
+      <media:content url="https://puu.sh/KKZDv.jpg" medium="image"/>
+      
+      
+      <enclosure url="https://puu.sh/KKZDv.jpg" type="image/jpeg"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%BB%92%E6%9C%88%E3%81%AE%E3%82%A4%E3%82%A7%E3%83%AB%E3%82%AF%E3%83%8A%E3%83%8F%E3%83%88/"><img src="https://puu.sh/KKZDv.jpg" alt="Kurotsuki_no_Yerknacht_v04.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%BB%92%E6%9C%88%E3%81%AE%E3%82%A4%E3%82%A7%E3%83%AB%E3%82%AF%E3%83%8A%E3%83%8F%E3%83%88/">Kurotsuki no Yerknacht</a><br/>Kurotsuki_no_Yerknacht_v04.rar.html</div>]]></description>
+      
+    
+    </item>
+    
+    
+    <item>
+      
+      
+      <title>Tsuki_Michibiku_Isekai_Douchuu_v16.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E6%9C%88%E3%81%8C%E5%B0%8E%E3%81%8F%E7%95%B0%E4%B8%96%E7%95%8C%E9%81%93%E4%B8%AD/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E6%9C%88%E3%81%8C%E5%B0%8E%E3%81%8F%E7%95%B0%E4%B8%96%E7%95%8C%E9%81%93%E4%B8%AD/|Tsuki_Michibiku_Isekai_Douchuu_v16.rar.html|2944783e</guid>
+      
+      
+      <pubDate>Thu, 02 Apr 2026 23:10:31 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://puu.sh/KKZDW.jpg"/>
+      
+      
+      <media:content url="https://puu.sh/KKZDW.jpg" medium="image"/>
+      
+      
+      <enclosure url="https://puu.sh/KKZDW.jpg" type="image/jpeg"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E6%9C%88%E3%81%8C%E5%B0%8E%E3%81%8F%E7%95%B0%E4%B8%96%E7%95%8C%E9%81%93%E4%B8%AD/"><img src="https://puu.sh/KKZDW.jpg" alt="Tsuki_Michibiku_Isekai_Douchuu_v16.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E6%9C%88%E3%81%8C%E5%B0%8E%E3%81%8F%E7%95%B0%E4%B8%96%E7%95%8C%E9%81%93%E4%B8%AD/">Tsuki Michibiku Isekai Douchuu</a><br/>Tsuki_Michibiku_Isekai_Douchuu_v16.rar.html</div>]]></description>
+      
+    
+    </item>
+    
+    
+    <item>
+      
+      
+      <title>Kage_no_shichikage_retsuden_v03.rar.html</title>
+      
+      
+      <link>https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC%E3%82%AA%E3%83%96%E3%82%AC%E3%83%BC%E3%83%87%E3%83%B3%EF%BD%9E%E4%B8%83%E9%99%B0%E5%88%97%E4%BC%9D%EF%BD%9E/</link>
+      
+      
+      <guid isPermaLink="false">https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC%E3%82%AA%E3%83%96%E3%82%AC%E3%83%BC%E3%83%87%E3%83%B3%EF%BD%9E%E4%B8%83%E9%99%B0%E5%88%97%E4%BC%9D%EF%BD%9E/|Kage_no_shichikage_retsuden_v03.rar.html|2944783e</guid>
+      
+      
+      <pubDate>Thu, 02 Apr 2026 23:10:32 +0000</pubDate>
+      
+      
+      <media:thumbnail url="https://puu.sh/KKZH8.jpg"/>
+      
+      
+      <media:content url="https://puu.sh/KKZH8.jpg" medium="image"/>
+      
+      
+      <enclosure url="https://puu.sh/KKZH8.jpg" type="image/jpeg"/>
+      
+      
+      <description><![CDATA[<a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC%E3%82%AA%E3%83%96%E3%82%AC%E3%83%BC%E3%83%87%E3%83%B3%EF%BD%9E%E4%B8%83%E9%99%B0%E5%88%97%E4%BC%9D%EF%BD%9E/"><img src="https://puu.sh/KKZH8.jpg" alt="Kage_no_shichikage_retsuden_v03.rar.html" style="max-width:200px;height:auto;display:block;margin-bottom:8px;" /></a><div><a href="https://dlraw.cc/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89/%E9%99%B0%E3%81%AE%E5%AE%9F%E5%8A%9B%E8%80%85%E3%81%AB%E3%81%AA%E3%82%8A%E3%81%9F%E3%81%8F%E3%81%A6%EF%BC%81%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC%E3%82%AA%E3%83%96%E3%82%AC%E3%83%BC%E3%83%87%E3%83%B3%EF%BD%9E%E4%B8%83%E9%99%B0%E5%88%97%E4%BC%9D%EF%BD%9E/">Kage no jitsuryokusha ni naritakute masuta obu gaden shichikage retsuden</a><br/>Kage_no_shichikage_retsuden_v03.rar.html</div>]]></description>
+      
+    
+    </item>
+    
+  
+  </channel>
+  
+
+</rss>
