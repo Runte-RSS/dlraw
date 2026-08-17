@@ -1000,7 +1000,7 @@ def update_feed(
             # Change this to True if you want the first
             # execution to create an RSS item.
 
-            create_initial_item = False
+            create_initial_item = True
 
             site_states[site_key] = current
 
