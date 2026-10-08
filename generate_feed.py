@@ -72,7 +72,7 @@ SITES = [
     },{
         "title": "Tenseishitara slime datta ken",
         "url": "https://dl-raw.si/%e8%bb%a2%e7%94%9f%e3%81%97%e3%81%9f%e3%82%89%e3%82%b9%e3%83%a9%e3%82%a4%e3%83%a0%e3%81%a0%e3%81%a3%e3%81%9f%e4%bb%b6-raw/",
-        "thumb": "https://puu.sh/KOdNv.png",
+        "thumb": "https://static.wikia.nocookie.net/tensei-shitara-slime-datta-ken/images/5/53/Manga_Volume_1_JP.jpg/revision/latest?cb=20181003060112",
     }
     # Add more sites here as needed:
     # {"title": "Another Series", "url": "https://dlraw.cc/.../", "thumb": "https://..."},
